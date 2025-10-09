@@ -23,6 +23,30 @@ const modulePathCache = new Map<string, string>();
 // Shared file content cache
 const fileContentCache = new Map<string, string>();
 
+// Enhanced module resolution cache with performance tracking
+interface EnhancedModuleCache {
+  resolvedFileName: string;
+  isExternalLibraryImport: boolean;
+  timestamp: number;
+}
+
+const enhancedModuleCache = new Map<string, EnhancedModuleCache>();
+const MODULE_RESOLUTION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// Common Angular modules to pre-cache
+const COMMON_ANGULAR_MODULES = [
+  '@angular/core',
+  '@angular/common',
+  '@angular/platform-browser',
+  '@angular/forms',
+  '@angular/router',
+  '@angular/animations',
+  'typescript',
+  'rxjs'
+];
+
+
+
 // Reusable compiler options
 const sharedCompilerOptions: ts.CompilerOptions = {
   module: ts.ModuleKind.ES2022,
@@ -40,6 +64,63 @@ const sharedCompilerOptions: ts.CompilerOptions = {
   noImplicitAny: false, // Allow implicit any for faster compilation
   noImplicitReturns: false // Skip strict return checking
 };
+
+// Optimize cache key generation for better performance
+const createCacheKey = (moduleName: string, containingFile: string): string => {
+  // Use shorter keys for better performance
+  const fileType = containingFile === '/main.ts' ? 'main' : 
+                  containingFile.includes('node_modules') ? 'npm' : 'local';
+  return `${moduleName}#${fileType}`;
+};
+
+// Pre-warm module cache with commonly used Angular modules
+const preWarmModuleCache = async (): Promise<void> => {
+  const startTime = Date.now();
+  let preWarmedCount = 0;
+  
+  for (const moduleName of COMMON_ANGULAR_MODULES) {
+    try {
+      const cacheKey = createCacheKey(moduleName, '/main.ts');
+      
+      // Skip if already cached
+      if (enhancedModuleCache.has(cacheKey)) continue;
+      
+      const result = ts.resolveModuleName(
+        moduleName,
+        '/main.ts',
+        sharedCompilerOptions, // Will be defined below
+        ts.sys
+      );
+      
+      if (result.resolvedModule) {
+        enhancedModuleCache.set(cacheKey, {
+          resolvedFileName: result.resolvedModule.resolvedFileName,
+          isExternalLibraryImport: true,
+          timestamp: Date.now()
+        });
+        
+        // Also add to legacy cache for compatibility
+        modulePathCache.set(cacheKey, result.resolvedModule.resolvedFileName);
+        preWarmedCount++;
+      }
+    } catch (error) {
+      // Silently continue on pre-warming errors
+      functions.logger.debug(`Pre-warming failed for ${moduleName}:`, error);
+    }
+  }
+  
+  const warmupTime = Date.now() - startTime;
+  functions.logger.info(`🚀 Pre-warmed ${preWarmedCount} modules in ${warmupTime}ms`);
+};
+
+// Pre-warm the module cache when the module loads (once per instance)
+(async () => {
+  try {
+    await preWarmModuleCache();
+  } catch (error) {
+    functions.logger.warn('Pre-warming failed:', error);
+  }
+})();
 
 export const compileAngular = functions.https.onRequest(async (req, res) => {
   // Enable CORS
@@ -145,88 +226,129 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         containingFile: string
       ): (ts.ResolvedModule | undefined)[] {
         const resolvedModules: (ts.ResolvedModule | undefined)[] = [];
-
-        for (const moduleName of moduleNames) {
-          // Check cache first
-          const cacheKey = `${moduleName}|${containingFile}`;
-          if (modulePathCache.has(cacheKey)) {
-            const cachedPath = modulePathCache.get(cacheKey);
-            if (cachedPath) {
-              resolvedModules.push({
-                resolvedFileName: cachedPath,
-                isExternalLibraryImport: true,
-              });
-              continue;
-            }
+        const toResolve: Array<{ index: number; moduleName: string; cacheKey: string }> = [];
+        
+        // Phase 1: Batch cache lookup for all modules
+        for (let i = 0; i < moduleNames.length; i++) {
+          const moduleName = moduleNames[i];
+          const cacheKey = createCacheKey(moduleName, containingFile);
+          
+          // Check enhanced cache first
+          const cachedModule = enhancedModuleCache.get(cacheKey);
+          if (cachedModule && (Date.now() - cachedModule.timestamp < MODULE_RESOLUTION_TTL)) {
+            resolvedModules[i] = {
+              resolvedFileName: cachedModule.resolvedFileName,
+              isExternalLibraryImport: cachedModule.isExternalLibraryImport,
+            };
+            continue;
           }
+          
+          // Check legacy cache
+          const legacyCachedPath = modulePathCache.get(cacheKey);
+          if (legacyCachedPath) {
+            // Migrate to enhanced cache
+            const enhancedEntry: EnhancedModuleCache = {
+              resolvedFileName: legacyCachedPath,
+              isExternalLibraryImport: true,
+              timestamp: Date.now()
+            };
+            enhancedModuleCache.set(cacheKey, enhancedEntry);
+            
+            resolvedModules[i] = {
+              resolvedFileName: legacyCachedPath,
+              isExternalLibraryImport: true,
+            };
+            continue;
+          }
+          
+          // Mark for resolution
+          toResolve.push({ index: i, moduleName, cacheKey });
+        }
 
-          const result = ts.resolveModuleName(
-            moduleName,
-            containingFile,
-            options,
-            {
-              fileExists: (fileName: string) => {
-                if (fileName.includes('node_modules')) {
-                  return fs.existsSync(fileName);
-                }
-                return ts.sys.fileExists(fileName);
-              },
-              readFile: (fileName: string) => {
-                return ts.sys.readFile(fileName);
-              },
-              directoryExists: (dirName: string) => {
-                return ts.sys.directoryExists(dirName);
-              },
-              getDirectories: (dirName: string) => {
-                return ts.sys.getDirectories(dirName);
-              },
-              realpath: ts.sys.realpath,
-              getCurrentDirectory: () => process.cwd(),
-            }
-          );
+        // Phase 2: Batch resolve uncached modules
+        if (toResolve.length > 0) {
+          // Create shared resolution host to avoid recreation overhead
+          const resolutionHost = {
+            fileExists: (fileName: string) => fileName.includes('node_modules') 
+              ? fs.existsSync(fileName) 
+              : ts.sys.fileExists(fileName),
+            readFile: ts.sys.readFile,
+            directoryExists: ts.sys.directoryExists,
+            getDirectories: ts.sys.getDirectories,
+            realpath: ts.sys.realpath,
+            getCurrentDirectory: () => process.cwd(),
+          };
 
-          if (result.resolvedModule) {
-            // Cache successful resolution
-            modulePathCache.set(cacheKey, result.resolvedModule.resolvedFileName);
-            resolvedModules.push(result.resolvedModule);
-          } else {
-            const modulePath = path.join(process.cwd(), 'node_modules', moduleName);
-            const indexPath = path.join(modulePath, 'index.d.ts');
-            const pkgJsonPath = path.join(modulePath, 'package.json');
+          for (const { index, moduleName, cacheKey } of toResolve) {
+            let resolvedModule: ts.ResolvedModule | undefined;
 
-            if (fs.existsSync(pkgJsonPath)) {
-              const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
-              const typesPath = pkgJson.types || pkgJson.typings;
-
-              if (typesPath) {
-                const resolvedPath = path.join(modulePath, typesPath);
-                if (fs.existsSync(resolvedPath)) {
-                  // Cache this resolution
-                  modulePathCache.set(cacheKey, resolvedPath);
-                  resolvedModules.push({
-                    resolvedFileName: resolvedPath,
-                    isExternalLibraryImport: true,
-                  });
-                  continue;
-                }
-              }
+            try {
+              const result = ts.resolveModuleName(moduleName, containingFile, options, resolutionHost);
+              resolvedModule = result.resolvedModule;
+            } catch (error) {
+              // Fallback resolution on error
+              resolvedModule = fallbackResolveModule(moduleName);
             }
 
-            if (fs.existsSync(indexPath)) {
-              // Cache this resolution
-              modulePathCache.set(cacheKey, indexPath);
-              resolvedModules.push({
-                resolvedFileName: indexPath,
-                isExternalLibraryImport: true,
+            // Try fallback if TypeScript resolution failed
+            if (!resolvedModule) {
+              resolvedModule = fallbackResolveModule(moduleName);
+            }
+
+            if (resolvedModule) {
+              // Cache the successful resolution
+              enhancedModuleCache.set(cacheKey, {
+                resolvedFileName: resolvedModule.resolvedFileName,
+                isExternalLibraryImport: resolvedModule.isExternalLibraryImport ?? true,
+                timestamp: Date.now()
               });
-            } else {
-              resolvedModules.push(undefined);
+              
+              // Also maintain legacy cache for compatibility
+              modulePathCache.set(cacheKey, resolvedModule.resolvedFileName);
             }
+
+            resolvedModules[index] = resolvedModule;
           }
         }
 
         return resolvedModules;
       },
+    };
+
+    // Fallback resolution for modules TypeScript can't resolve
+    const fallbackResolveModule = (moduleName: string): ts.ResolvedModule | undefined => {
+      try {
+        const modulePath = path.join(process.cwd(), 'node_modules', moduleName);
+        const pkgJsonPath = path.join(modulePath, 'package.json');
+        
+        if (fs.existsSync(pkgJsonPath)) {
+          const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+          const typesPath = pkgJson.types || pkgJson.typings || pkgJson.main;
+          
+          if (typesPath) {
+            const resolvedPath = path.join(modulePath, typesPath);
+            if (fs.existsSync(resolvedPath)) {
+              return {
+                resolvedFileName: resolvedPath,
+                isExternalLibraryImport: true,
+              };
+            }
+          }
+        }
+        
+        // Try index.d.ts as fallback
+        const indexPath = path.join(modulePath, 'index.d.ts');
+        if (fs.existsSync(indexPath)) {
+          return {
+            resolvedFileName: indexPath,
+            isExternalLibraryImport: true,
+          };
+        }
+      } catch (error) {
+        // Silent fallback failure
+      }
+      
+      return undefined;
     };
 
     const ngProgram = new NgtscProgram([VIRTUAL_FILE], options, host);

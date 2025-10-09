@@ -38,9 +38,22 @@ export class App {
   protected readonly totalLines = signal(0);
   protected readonly compilationTime = signal<number | null>(null);
   protected readonly fromCache = signal<boolean>(false);
+
+  // Debounce compilation to avoid excessive API calls
+  #compileTimeout: number | null = null;
   
   constructor() {
     this.compileCode(this.inputCode());
+  }
+
+  compileCodeDebounced(code: string, delay = 300) {
+    if (this.#compileTimeout) {
+      clearTimeout(this.#compileTimeout);
+    }
+    
+    this.#compileTimeout = setTimeout(() => {
+      this.compileCode(code);
+    }, delay);
   }
 
   async compileCode(code: string) {
