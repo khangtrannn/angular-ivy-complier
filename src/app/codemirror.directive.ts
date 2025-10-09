@@ -1,4 +1,4 @@
-import { Directive, ElementRef, OnInit, PLATFORM_ID, effect, inject, input } from '@angular/core';
+import { Directive, ElementRef, OnInit, effect, inject, input } from '@angular/core';
 import { EditorView, highlightActiveLine, lineNumbers } from '@codemirror/view';
 import { githubDark } from '@uiw/codemirror-theme-github';
 import { javascript } from '@codemirror/lang-javascript';
@@ -13,11 +13,10 @@ import { Compartment } from '@codemirror/state';
 export class CodeMirrorDirective implements OnInit {
   #editor!: EditorView;
   #elementRef = inject(ElementRef);
-  #platformId = inject(PLATFORM_ID);
 
   content = input.required<string>();
-  hasError = input<boolean>(false);
-  isCodeEdittor = input<boolean>(false);
+  hasDiagnostics = input<boolean>(false);
+  isCodeEditor = input<boolean>(false);
 
   #language = new Compartment();
   #activeLineHighlight = new Compartment();
@@ -31,7 +30,7 @@ export class CodeMirrorDirective implements OnInit {
       });
 
       this.#editor.dispatch({
-        effects: this.#language.reconfigure(this.hasError() ? [] : javascript()),
+        effects: this.#language.reconfigure(this.hasDiagnostics() ? [] : javascript()),
       });
     });
   }
@@ -65,7 +64,7 @@ export class CodeMirrorDirective implements OnInit {
       }),
     ];
 
-    if (this.isCodeEdittor()) {
+    if (this.isCodeEditor()) {
       extensions.push(lineNumbers());
       extensions.push(this.#activeLineHighlight.of([]));
 

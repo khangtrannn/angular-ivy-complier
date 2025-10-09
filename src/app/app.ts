@@ -28,7 +28,7 @@ export class App {}`,
   protected readonly inputCode = signal(this.templates.basic);
   protected readonly compilationError = signal<string | null>(null);
   protected readonly compiledCode = signal<string>('');
-  protected readonly hasError = signal(false);
+  protected readonly hasDiagnostics = signal(false);
   protected readonly isCompiling = signal(false);
   protected readonly isSkeletonFadingOut = signal(false);
   protected readonly isStreaming = signal(false);
@@ -47,18 +47,18 @@ export class App {}`,
       this.streamingProgress.set(0);
       this.compilationError.set(null);
       
-      const result = await firstValueFrom(this.#ivyClient.getCompiledCode(code));
+      const result = await firstValueFrom(this.#ivyClient.getCompiledOutput(code));
       
       this.isSkeletonFadingOut.set(true);
       
       // Wait for fade-out animation to complete before starting stream
       setTimeout(() => {
-        this.compiledCode.set(result.compiledCode);
-        this.hasError.set(result.hasError);
+        this.compiledCode.set(result.compiledOutput);
+        this.hasDiagnostics.set(result.hasDiagnostics);
         this.isCompiling.set(false);
         
         // Count lines and start streaming effect
-        const lines = result.compiledCode.split('\n');
+        const lines = result.compiledOutput.split('\n');
         this.totalLines.set(lines.length);
         this.startTypewriterEffect(lines.length);
       }, 300); // Match CSS transition duration

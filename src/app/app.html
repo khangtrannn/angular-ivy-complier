@@ -21,7 +21,7 @@
         #codeMirror="appCodeMirror" 
         appCodeMirror 
         [content]="inputCode()" 
-        [isCodeEdittor]="true">
+        [isCodeEditor]="true">
       </div>
 
       <div class="compiled-code-button-wrapper">
@@ -52,7 +52,7 @@
     } @else if (compiledCode()) {
       <div class="output-section">
         <div class="codemirror-container" [class.streaming]="isStreaming()">
-          <code class="compiled-code" [hasError]="hasError()" [content]="compiledCode()" appCodeMirror></code>
+          <code class="compiled-code" [hasDiagnostics]="hasDiagnostics()" [content]="compiledCode()" appCodeMirror></code>
 
           @if (isStreaming()) {
             <div class="typewriter-overlay" 

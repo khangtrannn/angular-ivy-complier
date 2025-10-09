@@ -10,14 +10,6 @@ interface CompileResponse {
   hasDiagnostics: boolean;
 }
 
-const inputCode = `import { Component } from '@angular/core';
-
-@Component({
-  selector: 'app-root',
-  template: '<h1>Hello Ivy Compiler!</h1>',
-})
-export class App {}`;
-
 export const compileAngular = functions.https.onRequest(async (req, res) => {
   // Enable CORS
   res.set('Access-Control-Allow-Origin', '*');
@@ -29,19 +21,19 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     return;
   }
 
-  // if (req.method !== 'POST') {
-  //   res.status(405).json({ error: 'Method not allowed' });
-  //   return;
-  // }
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
 
   try {
     const VIRTUAL_FILE = '/main.ts';
-    // const { code: inputCode } = req.body as CompileRequest;
+    const { code: inputCode } = req.body;
 
-    // if (!inputCode) {
-    //   res.status(400).json({ error: 'Code is required' });
-    //   return;
-    // }
+    if (!inputCode) {
+      res.status(400).json({ error: 'Code is required' });
+      return;
+    }
 
     const options: ts.CompilerOptions = {
       module: ts.ModuleKind.ES2022,
