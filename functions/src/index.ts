@@ -1,11 +1,11 @@
 import { setGlobalOptions } from "firebase-functions";
 
-// Optimize for performance and reduce cold starts
+// Cost-optimized configuration for demo usage
 setGlobalOptions({ 
-  maxInstances: 10,
-  memory: "1GiB", // More memory for faster compilation
+  maxInstances: 3, // Limit concurrent instances to control costs
+  memory: "1GiB", // Balanced performance and cost
   timeoutSeconds: 60,
-  minInstances: 1 // Keep at least one warm instance
+  minInstances: 0, // No always-on instances to minimize cost
 });
 
 export { compileAngular } from "./angular-compiler";

@@ -39,10 +39,10 @@ const sharedCompilerOptions: ts.CompilerOptions = {
 })();
 
 export const compileAngular = functions.https.onRequest({
-  memory: "1GiB",
+  memory: "1GiB", // Sufficient for compilation
   timeoutSeconds: 60,
-  maxInstances: 10,
-  minInstances: 1,
+  maxInstances: 3, // Limit costs
+  minInstances: 0, // No always-on cost
 }, async (req, res) => {
   // Enable CORS
   res.set('Access-Control-Allow-Origin', '*');
