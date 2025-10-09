@@ -14,8 +14,8 @@ export interface CompiledResponse {
   providedIn: 'root',
 })
 export class IvyClient {
-  // #URL = 'https://us-central1-mktrannblog.cloudfunctions.net/compileAngular';
-  #URL = 'http://127.0.0.1:5001/mktrannblog/us-central1/compileAngular';
+  #URL = 'https://us-central1-mktrannblog.cloudfunctions.net/compileAngular';
+  // #URL = 'http://127.0.0.1:5001/mktrannblog/us-central1/compileAngular';
   #http = inject(HttpClient);
 
   getCompiledOutput(code: string) {
