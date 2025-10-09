@@ -181,7 +181,7 @@
   position: relative;
   background: #0d1117;
   min-height: fit-content;
-  height: calc(100vh - 125px);
+  height: calc(100vh - 200px);
 
   &.has-diagnostics {
     color: #a5d6ff;
@@ -279,7 +279,7 @@
 // CodeMirror typewriter effect
 .codemirror-container {
   position: relative;
-  height: calc(100vh - 125px);
+  height: calc(100vh - 200px);
   overflow: hidden;
   
   &.streaming {
@@ -309,7 +309,7 @@
     &::after {
       content: '';
       position: absolute;
-      top: calc(var(--progress) * (100vh - 125px) / 100);
+      top: calc(var(--progress) * (100vh - 200px) / 100);
       left: 0;
       right: 0;
       height: 2px;

@@ -51,7 +51,7 @@ export class CodeMirrorDirective implements OnInit {
       EditorView.theme({
         '&': {
           fontSize: '12.5px',
-          height: 'calc(100vh - 125px)',
+          height: 'calc(100vh - 200px)',
         },
         '&.cm-focused': {
           outline: 'none',
