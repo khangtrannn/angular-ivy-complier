@@ -49,6 +49,9 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       declaration: false,
       sourceMap: false,
       typeRoots: [path.join(process.cwd(), 'node_modules', '@types')],
+      // Try to control property name output
+      // newLine: ts.NewLineKind.LineFeed,
+      // removeComments: false,
     };
 
     let compiledCode = '';
@@ -263,16 +266,24 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         reduce_funcs: false,
         unused: false,
         passes: 1,
-      },
+
+      }, // Disable compression entirely
       format: {
         beautify: true,
         braces: true,
         semicolons: true,
         keep_numbers: true,
-        keep_quoted_props: true,
+        keep_quoted_props: false, // Don't keep quotes on properties
+        quote_keys: false, // Don't quote keys unless absolutely necessary
+        quote_style: 0, // Use single quotes when needed
+        preserve_annotations: true,
         indent_level: 2,
       },
-      mangle: false,
+      mangle: false, // Don't mangle names
+      parse: {
+        ecma: 2020, // Parse as ES2020 (highest supported by Terser)
+      },
+      ecma: 2020, // Output ES2020
     });
 
     res.status(200).json({
