@@ -1,9 +1,10 @@
 import * as functions from 'firebase-functions';
 import * as ts from 'typescript';
-import { NgtscProgram } from '@angular/compiler-cli';
+import { NgtscProgram, readConfiguration } from '@angular/compiler-cli';
 import * as path from 'path';
 import * as fs from 'fs';
-import { minify } from 'terser';
+import * as prettier from 'prettier';
+import { NgCompilerHost } from '@angular/compiler-cli/src/ngtsc/core';
 
 interface CompileResponse {
   compiledOutput: string;
@@ -39,19 +40,9 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       module: ts.ModuleKind.ES2022,
       target: ts.ScriptTarget.ES2022,
       moduleResolution: ts.ModuleResolutionKind.Bundler,
-      lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
-      strict: true,
-      experimentalDecorators: true,
-      emitDecoratorMetadata: true,
       skipLibCheck: true,
       skipDefaultLibCheck: true,
-      noEmit: false,
-      declaration: false,
-      sourceMap: false,
-      typeRoots: [path.join(process.cwd(), 'node_modules', '@types')],
-      // Try to control property name output
-      // newLine: ts.NewLineKind.LineFeed,
-      // removeComments: false,
+      sourceMap: false
     };
 
     let compiledCode = '';
@@ -65,28 +56,10 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       directoryExists: (dirName: string) => ts.sys.directoryExists(dirName),
       fileExists: (fileName: string) => {
         if (fileName === VIRTUAL_FILE) return true;
-        
-        if (fileName.includes('lib.') && fileName.endsWith('.d.ts')) {
-          const libPath = path.join(
-            path.dirname(require.resolve('typescript')),
-            path.basename(fileName)
-          );
-          return fs.existsSync(libPath);
-        }
-        
         return ts.sys.fileExists(fileName);
       },
       readFile: (fileName: string) => {
         if (fileName === VIRTUAL_FILE) return inputCode;
-        
-        if (fileName.includes('lib.') && fileName.endsWith('.d.ts')) {
-          const libPath = path.join(
-            path.dirname(require.resolve('typescript')),
-            path.basename(fileName)
-          );
-          return ts.sys.readFile(libPath);
-        }
-        
         return ts.sys.readFile(fileName);
       },
       getCanonicalFileName: (fileName: string) =>
@@ -100,18 +73,8 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         if (fileName === VIRTUAL_FILE) {
           return ts.createSourceFile(fileName, inputCode, languageVersion, true);
         }
-        
-        if (fileName.includes('lib.') && fileName.endsWith('.d.ts')) {
-          const libPath = path.join(
-            path.dirname(require.resolve('typescript')),
-            path.basename(fileName)
-          );
-          const content = ts.sys.readFile(libPath);
-          return content
-            ? ts.createSourceFile(fileName, content, languageVersion, true)
-            : undefined;
-        }
-        
+
+
         const content = ts.sys.readFile(fileName);
         return content
           ? ts.createSourceFile(fileName, content, languageVersion, true)
@@ -122,7 +85,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         containingFile: string
       ): (ts.ResolvedModule | undefined)[] {
         const resolvedModules: (ts.ResolvedModule | undefined)[] = [];
-        
+
         for (const moduleName of moduleNames) {
           const result = ts.resolveModuleName(
             moduleName,
@@ -148,18 +111,18 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
               getCurrentDirectory: () => process.cwd(),
             }
           );
-          
+
           if (result.resolvedModule) {
             resolvedModules.push(result.resolvedModule);
           } else {
             const modulePath = path.join(process.cwd(), 'node_modules', moduleName);
             const indexPath = path.join(modulePath, 'index.d.ts');
             const pkgJsonPath = path.join(modulePath, 'package.json');
-            
+
             if (fs.existsSync(pkgJsonPath)) {
               const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
               const typesPath = pkgJson.types || pkgJson.typings;
-              
+
               if (typesPath) {
                 const resolvedPath = path.join(modulePath, typesPath);
                 if (fs.existsSync(resolvedPath)) {
@@ -171,7 +134,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
                 }
               }
             }
-            
+
             if (fs.existsSync(indexPath)) {
               resolvedModules.push({
                 resolvedFileName: indexPath,
@@ -182,7 +145,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
             }
           }
         }
-        
+
         return resolvedModules;
       },
     };
@@ -233,12 +196,11 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
               ? d.file.getLineAndCharacterOfPosition(d.start)
               : { line: 0, character: 0 };
 
-          return `${fileName}(${line + 1},${character + 1}): ${
-            ts.DiagnosticCategory[d.category]
-          } TS${d.code}: ${ts.flattenDiagnosticMessageText(
-            d.messageText,
-            '\n'
-          )}`;
+          return `${fileName}(${line + 1},${character + 1}): ${ts.DiagnosticCategory[d.category]
+            } TS${d.code}: ${ts.flattenDiagnosticMessageText(
+              d.messageText,
+              '\n'
+            )}`;
         })
         .join('\n');
 
@@ -249,45 +211,23 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       return;
     }
 
-    const minified = await minify(compiledCode, {
-      compress: {
-        global_defs: { ngDevMode: false },
-        dead_code: true,
-        conditionals: true,
-        sequences: false,
-        expression: false,
-        keep_classnames: true,
-        keep_fnames: true,
-        keep_fargs: true,
-        arguments: false,
-        booleans: false,
-        reduce_vars: false,
-        collapse_vars: false,
-        reduce_funcs: false,
-        unused: false,
-        passes: 1,
+    console.log('Raw compiled code:', compiledCode);
 
-      }, // Disable compression entirely
-      format: {
-        beautify: true,
-        braces: true,
-        semicolons: true,
-        keep_numbers: true,
-        keep_quoted_props: false, // Don't keep quotes on properties
-        quote_keys: false, // Don't quote keys unless absolutely necessary
-        quote_style: 0, // Use single quotes when needed
-        preserve_annotations: true,
-        indent_level: 2,
-      },
-      mangle: false, // Don't mangle names
-      parse: {
-        ecma: 2020, // Parse as ES2020 (highest supported by Terser)
-      },
-      ecma: 2020, // Output ES2020
+    const formattedCode = await prettier.format(removeNgDevModeBlocks(compiledCode), {
+      parser: 'typescript',
+      semi: true,
+      singleQuote: true,
+      trailingComma: 'es5',
+      tabWidth: 2,
+      useTabs: false,
+      printWidth: 80,
+      bracketSpacing: true,
+      arrowParens: 'avoid',
+      endOfLine: 'lf',
     });
 
     res.status(200).json({
-      compiledOutput: minified.code || compiledCode,
+      compiledOutput: formattedCode,
       hasDiagnostics: false,
     } as CompileResponse);
   } catch (err) {
@@ -298,3 +238,11 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     });
   }
 });
+
+function removeNgDevModeBlocks(code: string): string {
+  // Remove both ɵsetClassMetadata and ɵsetClassDebugInfo blocks
+  return code.replace(
+    /\(\(\) => \{ \(typeof ngDevMode === "undefined" \|\| ngDevMode\) && i\d+\.ɵsetClass(?:Metadata|DebugInfo)\([^;]+\); \}\)\(\);?\s*/g,
+    ''
+  );
+}

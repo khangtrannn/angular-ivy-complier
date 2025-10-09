@@ -16,13 +16,15 @@ export class App {
   #ivyClient = inject(IvyClient);
 
   protected readonly templates = {
-    basic: `import { Component } from '@angular/core';
+    basic: `import { Component, signal } from '@angular/core';
 
 @Component({
   selector: 'app-root',
-  template: '<h1>Hello Ivy Compiler!</h1>',
+  template: '<h1>{{ title() }}</h1>',
 })
-export class App {}`,
+export class App {
+  title = signal('Hello Angular');
+}`,
   };
 
   protected readonly inputCode = signal(this.templates.basic);
