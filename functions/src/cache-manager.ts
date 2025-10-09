@@ -20,16 +20,14 @@ export interface CompileResponse {
 export const MODULE_RESOLUTION_TTL = Infinity; // Cache modules permanently
 export const MAX_CACHE_SIZE = 1000;
 
-// Common Angular modules to pre-cache
+// Common Angular modules to pre-cache (prioritized by usage frequency)
 export const COMMON_ANGULAR_MODULES = [
-  '@angular/core',
-  '@angular/common',
-  '@angular/platform-browser',
-  '@angular/forms',
-  '@angular/router',
-  '@angular/animations',
-  'typescript',
-  'rxjs'
+  '@angular/core', // Most critical - always needed
+  'typescript', // TypeScript definitions
+  '@angular/common', // Common directives
+  '@angular/platform-browser', // Browser-specific features
+  'rxjs', // Reactive programming
+  // Removed less common modules to speed up pre-warming
 ];
 
 // Cache instances
@@ -58,8 +56,6 @@ export const createCacheKey = (moduleName: string, containingFile: string): stri
                   containingFile.includes('node_modules') ? 'npm' : 'local';
   return `${moduleName}#${fileType}`;
 };
-
-
 
 /**
  * Get module from enhanced cache (thread-safe)

@@ -38,7 +38,12 @@ const sharedCompilerOptions: ts.CompilerOptions = {
   }
 })();
 
-export const compileAngular = functions.https.onRequest(async (req, res) => {
+export const compileAngular = functions.https.onRequest({
+  memory: "1GiB",
+  timeoutSeconds: 60,
+  maxInstances: 10,
+  minInstances: 1,
+}, async (req, res) => {
   // Enable CORS
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -79,6 +84,13 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     if (cachedResult) {
       const compilationTime = Date.now() - startTime;
       
+      // Log cache hit for monitoring
+      functions.logger.info(`Cache hit in ${compilationTime}ms`, {
+        fromCache: true,
+        timings,
+        codeLength: inputCode.length
+      });
+      
       res.status(200).json({
         ...cachedResult,
         compilationTime,
@@ -99,6 +111,9 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     host.writeFile = (_: string, content: string) => {
       compiledCode = content;
     };
+    
+    // Add performance logging for host creation
+    functions.logger.debug(`Host created in ${timings.hostCreation}ms`);
 
     timings.hostCreation = Date.now() - startTime - timings.setup - timings.hashing - timings.cacheCheck;
     
@@ -224,6 +239,14 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     cacheCompilation(codeHash, {
       compiledOutput: formattedCode,
       hasDiagnostics: false
+    });
+
+    // Log performance metrics for monitoring
+    functions.logger.info(`Compilation completed in ${compilationTime}ms`, {
+      fromCache: false,
+      timings,
+      codeLength: inputCode.length,
+      outputLength: formattedCode.length
     });
 
     res.status(200).json(result);
