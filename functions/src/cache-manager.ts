@@ -231,8 +231,8 @@ export const preWarmModuleCache = async (sharedCompilerOptions: ts.CompilerOptio
   }
   
   const warmupTime = Date.now() - startTime;
-  functions.logger.info(`🚀 Pre-warmed ${preWarmedCount} modules in ${warmupTime}ms`);
-  functions.logger.info(`📊 Permanent module caching enabled`);
+  functions.logger.info(`� Pre-warmed ${preWarmedCount} modules in ${warmupTime}ms`);
+  functions.logger.info(`�📊 Permanent module caching enabled`);
 };
 
 /**

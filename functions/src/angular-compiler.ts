@@ -39,7 +39,7 @@ const sharedCompilerOptions: ts.CompilerOptions = {
 })();
 
 export const compileAngular = functions.https.onRequest({
-  memory: "1GiB", // Sufficient for compilation
+  memory: "2GiB", // Sufficient for compilation
   timeoutSeconds: 60,
   maxInstances: 3, // Limit costs
   minInstances: 0, // No always-on cost

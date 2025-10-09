@@ -118,6 +118,7 @@
   .editor-tabs {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     background: #252526;
     height: 35px;
     border-bottom: 1px solid #2d2d2d;
@@ -149,6 +150,31 @@
       &.active {
         background: #1e1e1e;
         color: #fff;
+      }
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding-right: 12px;
+    }
+
+    .window-control {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+
+      &.close {
+        background: #ff5f56;
+      }
+
+      &.minimize {
+        background: #ffbd2e;
+      }
+
+      &.maximize {
+        background: #28ca42;
       }
     }
   }
@@ -303,8 +329,9 @@
 // CodeMirror typewriter effect
 .codemirror-container {
   position: relative;
-  height: calc(100vh - 150px);
+  height: calc(100vh - 190px); // Adjusted for the header
   overflow: hidden;
+  flex: 1;
   
   &.streaming {
     .compiled-code {
