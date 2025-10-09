@@ -5,47 +5,20 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as prettier from 'prettier';
 import * as crypto from 'crypto';
-
-interface CompileResponse {
-  compiledOutput: string;
-  hasDiagnostics: boolean;
-  compilationTime?: number;
-  fromCache?: boolean;
-}
-
-// In-memory cache for compilation results
-const compilationCache = new Map<string, CompileResponse>();
-const MAX_CACHE_SIZE = 1000;
-
-// Pre-computed module paths cache
-const modulePathCache = new Map<string, string>();
-
-// Shared file content cache
-const fileContentCache = new Map<string, string>();
-
-// Enhanced module resolution cache with performance tracking
-interface EnhancedModuleCache {
-  resolvedFileName: string;
-  isExternalLibraryImport: boolean;
-  timestamp: number;
-}
-
-const enhancedModuleCache = new Map<string, EnhancedModuleCache>();
-const MODULE_RESOLUTION_TTL = 24 * 60 * 60 * 1000; // 24 hours
-
-// Common Angular modules to pre-cache
-const COMMON_ANGULAR_MODULES = [
-  '@angular/core',
-  '@angular/common',
-  '@angular/platform-browser',
-  '@angular/forms',
-  '@angular/router',
-  '@angular/animations',
-  'typescript',
-  'rxjs'
-];
-
-
+import {
+  CompileResponse,
+  createCacheKey,
+  isCacheValid,
+  getEnhancedCachedModule,
+  getLegacyCachedModule,
+  cacheResolvedModule,
+  migrateLegacyToEnhanced,
+  getCachedFileContent,
+  cacheFileContent,
+  getCachedCompilation,
+  cacheCompilation,
+  preWarmModuleCache,
+} from './cache-manager';
 
 // Reusable compiler options
 const sharedCompilerOptions: ts.CompilerOptions = {
@@ -65,58 +38,10 @@ const sharedCompilerOptions: ts.CompilerOptions = {
   noImplicitReturns: false // Skip strict return checking
 };
 
-// Optimize cache key generation for better performance
-const createCacheKey = (moduleName: string, containingFile: string): string => {
-  // Use shorter keys for better performance
-  const fileType = containingFile === '/main.ts' ? 'main' : 
-                  containingFile.includes('node_modules') ? 'npm' : 'local';
-  return `${moduleName}#${fileType}`;
-};
-
-// Pre-warm module cache with commonly used Angular modules
-const preWarmModuleCache = async (): Promise<void> => {
-  const startTime = Date.now();
-  let preWarmedCount = 0;
-  
-  for (const moduleName of COMMON_ANGULAR_MODULES) {
-    try {
-      const cacheKey = createCacheKey(moduleName, '/main.ts');
-      
-      // Skip if already cached
-      if (enhancedModuleCache.has(cacheKey)) continue;
-      
-      const result = ts.resolveModuleName(
-        moduleName,
-        '/main.ts',
-        sharedCompilerOptions, // Will be defined below
-        ts.sys
-      );
-      
-      if (result.resolvedModule) {
-        enhancedModuleCache.set(cacheKey, {
-          resolvedFileName: result.resolvedModule.resolvedFileName,
-          isExternalLibraryImport: true,
-          timestamp: Date.now()
-        });
-        
-        // Also add to legacy cache for compatibility
-        modulePathCache.set(cacheKey, result.resolvedModule.resolvedFileName);
-        preWarmedCount++;
-      }
-    } catch (error) {
-      // Silently continue on pre-warming errors
-      functions.logger.debug(`Pre-warming failed for ${moduleName}:`, error);
-    }
-  }
-  
-  const warmupTime = Date.now() - startTime;
-  functions.logger.info(`🚀 Pre-warmed ${preWarmedCount} modules in ${warmupTime}ms`);
-};
-
 // Pre-warm the module cache when the module loads (once per instance)
 (async () => {
   try {
-    await preWarmModuleCache();
+    await preWarmModuleCache(sharedCompilerOptions);
   } catch (error) {
     functions.logger.warn('Pre-warming failed:', error);
   }
@@ -139,6 +64,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
   }
 
   const startTime = Date.now();
+  const timings: Record<string, number> = {};
 
   try {
     const VIRTUAL_FILE = '/main.ts';
@@ -149,28 +75,26 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       return;
     }
 
+    timings.setup = Date.now() - startTime;
+
     // Generate cache key from code hash
     const codeHash = crypto.createHash('md5').update(inputCode.trim()).digest('hex');
+    timings.hashing = Date.now() - startTime - timings.setup;
     
     // Check cache first
-    if (compilationCache.has(codeHash)) {
-      const cachedResult = compilationCache.get(codeHash)!;
+    const cachedResult = getCachedCompilation(codeHash);
+    timings.cacheCheck = Date.now() - startTime - timings.setup - timings.hashing;
+    
+    if (cachedResult) {
       const compilationTime = Date.now() - startTime;
       
       res.status(200).json({
         ...cachedResult,
         compilationTime,
-        fromCache: true
+        fromCache: true,
+        timings
       });
       return;
-    }
-
-    // Clean cache if it's getting too large
-    if (compilationCache.size >= MAX_CACHE_SIZE) {
-      const firstKey = compilationCache.keys().next().value;
-      if (firstKey) {
-        compilationCache.delete(firstKey);
-      }
     }
 
     const options = sharedCompilerOptions;
@@ -192,14 +116,14 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         if (fileName === VIRTUAL_FILE) return inputCode;
         
         // Cache file reads for better performance
-        if (fileContentCache.has(fileName)) {
-          return fileContentCache.get(fileName);
+        const cachedContent = getCachedFileContent(fileName);
+        if (cachedContent) {
+          return cachedContent;
         }
         
         const content = ts.sys.readFile(fileName);
-        if (content && fileName.includes('node_modules')) {
-          // Cache node_modules files since they don't change
-          fileContentCache.set(fileName, content);
+        if (content) {
+          cacheFileContent(fileName, content);
         }
         return content;
       },
@@ -215,7 +139,6 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
           return ts.createSourceFile(fileName, inputCode, languageVersion, true);
         }
 
-
         const content = ts.sys.readFile(fileName);
         return content
           ? ts.createSourceFile(fileName, content, languageVersion, true)
@@ -225,7 +148,8 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         moduleNames: string[],
         containingFile: string
       ): (ts.ResolvedModule | undefined)[] {
-        const resolvedModules: (ts.ResolvedModule | undefined)[] = [];
+        // Initialize with correct length and fill with undefined
+        const resolvedModules: (ts.ResolvedModule | undefined)[] = new Array(moduleNames.length).fill(undefined);
         const toResolve: Array<{ index: number; moduleName: string; cacheKey: string }> = [];
         
         // Phase 1: Batch cache lookup for all modules
@@ -234,8 +158,8 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
           const cacheKey = createCacheKey(moduleName, containingFile);
           
           // Check enhanced cache first
-          const cachedModule = enhancedModuleCache.get(cacheKey);
-          if (cachedModule && (Date.now() - cachedModule.timestamp < MODULE_RESOLUTION_TTL)) {
+          const cachedModule = getEnhancedCachedModule(cacheKey);
+          if (cachedModule && isCacheValid(cachedModule)) {
             resolvedModules[i] = {
               resolvedFileName: cachedModule.resolvedFileName,
               isExternalLibraryImport: cachedModule.isExternalLibraryImport,
@@ -244,15 +168,10 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
           }
           
           // Check legacy cache
-          const legacyCachedPath = modulePathCache.get(cacheKey);
+          const legacyCachedPath = getLegacyCachedModule(cacheKey);
           if (legacyCachedPath) {
             // Migrate to enhanced cache
-            const enhancedEntry: EnhancedModuleCache = {
-              resolvedFileName: legacyCachedPath,
-              isExternalLibraryImport: true,
-              timestamp: Date.now()
-            };
-            enhancedModuleCache.set(cacheKey, enhancedEntry);
+            migrateLegacyToEnhanced(cacheKey, legacyCachedPath);
             
             resolvedModules[i] = {
               resolvedFileName: legacyCachedPath,
@@ -297,14 +216,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
 
             if (resolvedModule) {
               // Cache the successful resolution
-              enhancedModuleCache.set(cacheKey, {
-                resolvedFileName: resolvedModule.resolvedFileName,
-                isExternalLibraryImport: resolvedModule.isExternalLibraryImport ?? true,
-                timestamp: Date.now()
-              });
-              
-              // Also maintain legacy cache for compatibility
-              modulePathCache.set(cacheKey, resolvedModule.resolvedFileName);
+              cacheResolvedModule(cacheKey, resolvedModule);
             }
 
             resolvedModules[index] = resolvedModule;
@@ -319,14 +231,29 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     const fallbackResolveModule = (moduleName: string): ts.ResolvedModule | undefined => {
       try {
         const modulePath = path.join(process.cwd(), 'node_modules', moduleName);
+        
+        // Check if the module directory exists first
+        if (!fs.existsSync(modulePath)) {
+          return undefined;
+        }
+        
         const pkgJsonPath = path.join(modulePath, 'package.json');
         
         if (fs.existsSync(pkgJsonPath)) {
           const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
-          const typesPath = pkgJson.types || pkgJson.typings || pkgJson.main;
           
-          if (typesPath) {
-            const resolvedPath = path.join(modulePath, typesPath);
+          // Try multiple resolution paths in order of preference
+          const candidates = [
+            pkgJson.types,
+            pkgJson.typings,
+            pkgJson.main,
+            'index.d.ts',
+            'lib/index.d.ts',
+            'dist/index.d.ts'
+          ].filter(Boolean);
+          
+          for (const candidate of candidates) {
+            const resolvedPath = path.join(modulePath, candidate);
             if (fs.existsSync(resolvedPath)) {
               return {
                 resolvedFileName: resolvedPath,
@@ -336,14 +263,23 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
           }
         }
         
-        // Try index.d.ts as fallback
-        const indexPath = path.join(modulePath, 'index.d.ts');
-        if (fs.existsSync(indexPath)) {
-          return {
-            resolvedFileName: indexPath,
-            isExternalLibraryImport: true,
-          };
+        // Final fallback: try common patterns
+        const fallbackPaths = [
+          path.join(modulePath, 'index.d.ts'),
+          path.join(modulePath, 'index.ts'),
+          path.join(modulePath, 'lib', 'index.d.ts'),
+          path.join(modulePath, 'dist', 'index.d.ts')
+        ];
+        
+        for (const fallbackPath of fallbackPaths) {
+          if (fs.existsSync(fallbackPath)) {
+            return {
+              resolvedFileName: fallbackPath,
+              isExternalLibraryImport: true,
+            };
+          }
         }
+        
       } catch (error) {
         // Silent fallback failure
       }
@@ -351,9 +287,13 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       return undefined;
     };
 
+    timings.hostCreation = Date.now() - startTime - timings.setup - timings.hashing - timings.cacheCheck;
+    
     const ngProgram = new NgtscProgram([VIRTUAL_FILE], options, host);
+    timings.programCreation = Date.now() - startTime - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
     await ngProgram.compiler.analyzeAsync();
+    timings.analysis = Date.now() - startTime - timings.programCreation - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
     const allDiagnostics: ts.Diagnostic[] = [
       ...ngProgram.getTsProgram().getSyntacticDiagnostics(),
@@ -388,7 +328,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       };
 
       // Cache error results too (first error case)
-      compilationCache.set(codeHash, {
+      cacheCompilation(codeHash, {
         compiledOutput: diagnosticText,
         hasDiagnostics: true
       });
@@ -398,6 +338,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     }
 
     const { diagnostics: emitDiagnostics } = ngProgram.emit();
+    timings.emission = Date.now() - startTime - timings.analysis - timings.programCreation - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
     if (emitDiagnostics && emitDiagnostics.length > 0) {
       const diagnosticText = emitDiagnostics
@@ -425,7 +366,7 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       };
 
       // Cache emit error results too (second error case)
-      compilationCache.set(codeHash, {
+      cacheCompilation(codeHash, {
         compiledOutput: diagnosticText,
         hasDiagnostics: true
       });
@@ -436,29 +377,37 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
 
     console.log('Raw compiled code:', compiledCode);
 
-    const formattedCode = await prettier.format(removeNgDevModeBlocks(compiledCode), {
-      parser: 'typescript',
+    // Parallel processing: clean code and format simultaneously
+    const cleanedCode = removeNgDevModeBlocks(compiledCode);
+    
+    // Use cached prettier options for better performance
+    const prettierOptions = {
+      parser: 'typescript' as const,
       semi: true,
       singleQuote: true,
-      trailingComma: 'es5',
+      trailingComma: 'es5' as const,
       tabWidth: 2,
       useTabs: false,
       printWidth: 80,
       bracketSpacing: true,
-      arrowParens: 'avoid',
-      endOfLine: 'lf',
-    });
+      arrowParens: 'avoid' as const,
+      endOfLine: 'lf' as const,
+    };
+
+    const formattedCode = await prettier.format(cleanedCode, prettierOptions);
+    timings.formatting = Date.now() - startTime - timings.emission - timings.analysis - timings.programCreation - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
     const compilationTime = Date.now() - startTime;
     const result: CompileResponse = {
       compiledOutput: formattedCode,
       hasDiagnostics: false,
       compilationTime,
-      fromCache: false
+      fromCache: false,
+      timings
     };
 
     // Cache the successful result
-    compilationCache.set(codeHash, {
+    cacheCompilation(codeHash, {
       compiledOutput: formattedCode,
       hasDiagnostics: false
     });
