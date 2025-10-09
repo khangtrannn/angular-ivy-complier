@@ -1,9 +1,10 @@
 import { Directive, ElementRef, OnInit, effect, inject, input } from '@angular/core';
-import { EditorView, highlightActiveLine, lineNumbers } from '@codemirror/view';
+import { EditorView, highlightActiveLine, lineNumbers, keymap } from '@codemirror/view';
 import { githubDark } from '@uiw/codemirror-theme-github';
 import { javascript } from '@codemirror/lang-javascript';
 import { minimalSetup } from 'codemirror';
 import { Compartment, EditorState } from '@codemirror/state';
+import { indentWithTab, defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 
 @Directive({
   selector: '[appCodeMirror]',
@@ -45,6 +46,8 @@ export class CodeMirrorDirective implements OnInit {
   ngOnInit(): void {
     const extensions = [
       minimalSetup,
+      history(),
+      keymap.of([indentWithTab, ...historyKeymap, ...defaultKeymap]),
       githubDark,
       EditorView.lineWrapping,
       this.#language.of(javascript()),
