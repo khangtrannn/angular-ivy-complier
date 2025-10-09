@@ -36,6 +36,8 @@ export class App {
   protected readonly isStreaming = signal(false);
   protected readonly streamingProgress = signal(0); // Percentage of lines revealed
   protected readonly totalLines = signal(0);
+  protected readonly compilationTime = signal<number | null>(null);
+  protected readonly fromCache = signal<boolean>(false);
   
   constructor() {
     this.compileCode(this.inputCode());
@@ -57,6 +59,8 @@ export class App {
       setTimeout(() => {
         this.compiledCode.set(result.compiledOutput);
         this.hasDiagnostics.set(result.hasDiagnostics);
+        this.compilationTime.set(result.compilationTime);
+        this.fromCache.set(result.fromCache || false);
         this.isCompiling.set(false);
         
         // Count lines and start streaming effect
@@ -69,6 +73,8 @@ export class App {
       this.isSkeletonFadingOut.set(true);
       setTimeout(() => {
         this.compilationError.set(error.message || 'Compilation failed');
+        this.compilationTime.set(null);
+        this.fromCache.set(false);
         this.isCompiling.set(false);
       }, 300);
     }

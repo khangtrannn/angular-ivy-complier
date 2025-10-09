@@ -55,6 +55,17 @@
       </div>
     } @else if (compiledCode()) {
       <div class="output-section">
+        @if (compilationTime() !== null) {
+          <div class="performance-info">
+            <span class="compilation-time">
+              ⚡ {{ compilationTime() }}ms
+              @if (fromCache()) {
+                <span class="cache-indicator">(cached)</span>
+              }
+            </span>
+          </div>
+        }
+        
         <div class="codemirror-container" [class.streaming]="isStreaming()">
           <code class="compiled-code" [hasDiagnostics]="hasDiagnostics()" [content]="compiledCode()" appCodeMirror></code>
 
