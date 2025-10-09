@@ -324,7 +324,8 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         compiledOutput: diagnosticText,
         hasDiagnostics: true,
         compilationTime,
-        fromCache: false
+        fromCache: false,
+        timings
       };
 
       // Cache error results too (first error case)
@@ -362,7 +363,8 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
         compiledOutput: diagnosticText,
         hasDiagnostics: true,
         compilationTime,
-        fromCache: false
+        fromCache: false,
+        timings
       };
 
       // Cache emit error results too (second error case)
