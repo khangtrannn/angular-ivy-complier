@@ -29,11 +29,6 @@ jobs:
     - name: Build application
       run: npm run build:prod
 
-    - name: Fix GitHub Pages routing
-      run: |
-        cd dist/angular-ivy-complier/browser
-        cp index.html 404.html
-
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
