@@ -4,7 +4,6 @@ import { NgtscProgram, readConfiguration } from '@angular/compiler-cli';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as prettier from 'prettier';
-import { NgCompilerHost } from '@angular/compiler-cli/src/ngtsc/core';
 
 interface CompileResponse {
   compiledOutput: string;
