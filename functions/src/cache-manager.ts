@@ -40,9 +40,9 @@ const compilationCache = new Map<string, CompileResponse>();
 
 // TypeScript Program cache for reusing expensive compiler setup
 export interface CachedTsProgram {
-  program: any; // ts.Program instance 
-  host: any; // CompilerHost template (not shared between requests)
-  options: any; // CompilerOptions
+  program: ts.Program;
+  host: ts.CompilerHost;
+  options: ts.CompilerOptions;
   lastUsed: number;
 }
 
@@ -242,9 +242,9 @@ export const preWarmModuleCache = async (sharedCompilerOptions: ts.CompilerOptio
 /**
  * Create a thread-safe host factory that reuses expensive parts
  */
-export const createOptimizedHost = (inputCode: string, virtualFile: string, options: any) => {
-  const host: any = {
-    getDefaultLibFileName: (opts: any) => {
+export const createOptimizedHost = (inputCode: string, virtualFile: string, options: ts.CompilerOptions): ts.CompilerHost => {
+  const host: ts.CompilerHost = {
+    getDefaultLibFileName: (opts: ts.CompilerOptions) => {
       return ts.getDefaultLibFilePath(opts);
     },
     getCurrentDirectory: () => process.cwd(),
@@ -281,7 +281,7 @@ export const createOptimizedHost = (inputCode: string, virtualFile: string, opti
     writeFile: (_: string, content: string) => {
       // This will be overwritten per request
     },
-    getSourceFile(fileName: string, languageVersion: any): any {
+    getSourceFile(fileName: string, languageVersion: ts.ScriptTarget): ts.SourceFile | undefined {
       if (fileName === virtualFile) {
         return ts.createSourceFile(fileName, inputCode, languageVersion, true);
       }
@@ -300,7 +300,7 @@ export const createOptimizedHost = (inputCode: string, virtualFile: string, opti
 /**
  * Fallback resolution for modules TypeScript can't resolve
  */
-const fallbackResolveModule = (moduleName: string): any | undefined => {
+const fallbackResolveModule = (moduleName: string): ts.ResolvedModule | undefined => {
   try {
     const path = require('path');
     const fs = require('fs');
@@ -365,10 +365,10 @@ const fallbackResolveModule = (moduleName: string): any | undefined => {
 /**
  * Create a cached module resolver that's safe for concurrent use
  */
-const createCachedModuleResolver = (options: any) => {
-  return (moduleNames: string[], containingFile: string): (any | undefined)[] => {
+const createCachedModuleResolver = (options: ts.CompilerOptions) => {
+  return (moduleNames: string[], containingFile: string): (ts.ResolvedModule | undefined)[] => {
     // Initialize with correct length and fill with undefined
-    const resolvedModules: (any | undefined)[] = new Array(moduleNames.length).fill(undefined);
+    const resolvedModules: (ts.ResolvedModule | undefined)[] = new Array(moduleNames.length).fill(undefined);
     const toResolve: Array<{ index: number; moduleName: string; cacheKey: string }> = [];
     
     // Phase 1: Batch cache lookup for all modules
@@ -418,7 +418,7 @@ const createCachedModuleResolver = (options: any) => {
       };
 
       for (const { index, moduleName, cacheKey } of toResolve) {
-        let resolvedModule: any | undefined;
+        let resolvedModule: ts.ResolvedModule | undefined;
 
         // Check if someone else is already resolving this module
         if (!markModuleAsResolving(cacheKey)) {

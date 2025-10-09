@@ -1,23 +1,14 @@
-import * as functions from 'firebase-functions';
-import * as ts from 'typescript';
-import { NgtscProgram, readConfiguration } from '@angular/compiler-cli';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as prettier from 'prettier';
+import { NgtscProgram } from '@angular/compiler-cli';
 import * as crypto from 'crypto';
+import * as functions from 'firebase-functions';
+import * as prettier from 'prettier';
+import * as ts from 'typescript';
 import {
-  CompileResponse,
-  createCacheKey,
-  getEnhancedCachedModule,
-  getLegacyCachedModule,
-  cacheResolvedModule,
-  migrateLegacyToEnhanced,
-  getCachedFileContent,
-  cacheFileContent,
-  getCachedCompilation,
   cacheCompilation,
-  preWarmModuleCache,
+  CompileResponse,
   createOptimizedHost,
+  getCachedCompilation,
+  preWarmModuleCache,
 } from './cache-manager';
 
 // Reusable compiler options
@@ -108,8 +99,6 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
     host.writeFile = (_: string, content: string) => {
       compiledCode = content;
     };
-
-
 
     timings.hostCreation = Date.now() - startTime - timings.setup - timings.hashing - timings.cacheCheck;
     
