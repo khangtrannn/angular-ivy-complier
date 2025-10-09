@@ -17,7 +17,7 @@ export interface CompileResponse {
 }
 
 // Cache configuration
-export const MODULE_RESOLUTION_TTL = 24 * 60 * 60 * 1000; // 24 hours
+export const MODULE_RESOLUTION_TTL = Infinity; // Cache modules permanently
 export const MAX_CACHE_SIZE = 1000;
 
 // Common Angular modules to pre-cache
@@ -59,12 +59,7 @@ export const createCacheKey = (moduleName: string, containingFile: string): stri
   return `${moduleName}#${fileType}`;
 };
 
-/**
- * Check if a cached module is still valid (not expired)
- */
-export const isCacheValid = (cachedModule: EnhancedModuleCache): boolean => {
-  return Date.now() - cachedModule.timestamp < MODULE_RESOLUTION_TTL;
-};
+
 
 /**
  * Get module from enhanced cache (thread-safe)
@@ -241,6 +236,7 @@ export const preWarmModuleCache = async (sharedCompilerOptions: ts.CompilerOptio
   
   const warmupTime = Date.now() - startTime;
   functions.logger.info(`🚀 Pre-warmed ${preWarmedCount} modules in ${warmupTime}ms`);
+  functions.logger.info(`📊 Permanent module caching enabled`);
 };
 
 /**
@@ -382,7 +378,7 @@ const createCachedModuleResolver = (options: any) => {
       
       // Check enhanced cache first
       const cachedModule = getEnhancedCachedModule(cacheKey);
-      if (cachedModule && isCacheValid(cachedModule)) {
+      if (cachedModule) {
         resolvedModules[i] = {
           resolvedFileName: cachedModule.resolvedFileName,
           isExternalLibraryImport: cachedModule.isExternalLibraryImport,
@@ -430,7 +426,7 @@ const createCachedModuleResolver = (options: any) => {
           // In the unlikely event of concurrent resolution of the same module,
           // we'll just resolve it again (better than blocking)
           const recheckCached = getEnhancedCachedModule(cacheKey);
-          if (recheckCached && isCacheValid(recheckCached)) {
+          if (recheckCached) {
             resolvedModules[index] = {
               resolvedFileName: recheckCached.resolvedFileName,
               isExternalLibraryImport: recheckCached.isExternalLibraryImport,
@@ -478,6 +474,8 @@ export const getCacheStats = () => {
     legacyModuleCacheSize: modulePathCache.size,
     fileCacheSize: fileContentCache.size,
     compilationCacheSize: compilationCache.size,
-    tsProgramCacheSize: tsProgramCache.size
+    tsProgramCacheSize: tsProgramCache.size,
+    totalCachedModules: enhancedModuleCache.size + modulePathCache.size,
+    permanentCaching: MODULE_RESOLUTION_TTL === Infinity
   };
 };

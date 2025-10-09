@@ -8,7 +8,6 @@ import * as crypto from 'crypto';
 import {
   CompileResponse,
   createCacheKey,
-  isCacheValid,
   getEnhancedCachedModule,
   getLegacyCachedModule,
   cacheResolvedModule,
