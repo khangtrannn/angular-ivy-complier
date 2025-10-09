@@ -18,6 +18,7 @@ import {
   getCachedCompilation,
   cacheCompilation,
   preWarmModuleCache,
+  createOptimizedHost,
 } from './cache-manager';
 
 // Reusable compiler options
@@ -101,194 +102,19 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
 
     let compiledCode = '';
 
-    const host: ts.CompilerHost = {
-      getDefaultLibFileName: (opts: ts.CompilerOptions) => {
-        return ts.getDefaultLibFilePath(opts);
-      },
-      getCurrentDirectory: () => process.cwd(),
-      getDirectories: (pathStr: string) => ts.sys.getDirectories(pathStr),
-      directoryExists: (dirName: string) => ts.sys.directoryExists(dirName),
-      fileExists: (fileName: string) => {
-        if (fileName === VIRTUAL_FILE) return true;
-        return ts.sys.fileExists(fileName);
-      },
-      readFile: (fileName: string) => {
-        if (fileName === VIRTUAL_FILE) return inputCode;
-        
-        // Cache file reads for better performance
-        const cachedContent = getCachedFileContent(fileName);
-        if (cachedContent) {
-          return cachedContent;
-        }
-        
-        const content = ts.sys.readFile(fileName);
-        if (content) {
-          cacheFileContent(fileName, content);
-        }
-        return content;
-      },
-      getCanonicalFileName: (fileName: string) =>
-        ts.sys.useCaseSensitiveFileNames ? fileName : fileName.toLowerCase(),
-      useCaseSensitiveFileNames: () => !!ts.sys.useCaseSensitiveFileNames,
-      getNewLine: () => ts.sys.newLine,
-      writeFile: (_: string, content: string) => {
-        compiledCode = content;
-      },
-      getSourceFile(fileName: string, languageVersion: ts.ScriptTarget): ts.SourceFile | undefined {
-        if (fileName === VIRTUAL_FILE) {
-          return ts.createSourceFile(fileName, inputCode, languageVersion, true);
-        }
-
-        const content = ts.sys.readFile(fileName);
-        return content
-          ? ts.createSourceFile(fileName, content, languageVersion, true)
-          : undefined;
-      },
-      resolveModuleNames(
-        moduleNames: string[],
-        containingFile: string
-      ): (ts.ResolvedModule | undefined)[] {
-        // Initialize with correct length and fill with undefined
-        const resolvedModules: (ts.ResolvedModule | undefined)[] = new Array(moduleNames.length).fill(undefined);
-        const toResolve: Array<{ index: number; moduleName: string; cacheKey: string }> = [];
-        
-        // Phase 1: Batch cache lookup for all modules
-        for (let i = 0; i < moduleNames.length; i++) {
-          const moduleName = moduleNames[i];
-          const cacheKey = createCacheKey(moduleName, containingFile);
-          
-          // Check enhanced cache first
-          const cachedModule = getEnhancedCachedModule(cacheKey);
-          if (cachedModule && isCacheValid(cachedModule)) {
-            resolvedModules[i] = {
-              resolvedFileName: cachedModule.resolvedFileName,
-              isExternalLibraryImport: cachedModule.isExternalLibraryImport,
-            };
-            continue;
-          }
-          
-          // Check legacy cache
-          const legacyCachedPath = getLegacyCachedModule(cacheKey);
-          if (legacyCachedPath) {
-            // Migrate to enhanced cache
-            migrateLegacyToEnhanced(cacheKey, legacyCachedPath);
-            
-            resolvedModules[i] = {
-              resolvedFileName: legacyCachedPath,
-              isExternalLibraryImport: true,
-            };
-            continue;
-          }
-          
-          // Mark for resolution
-          toResolve.push({ index: i, moduleName, cacheKey });
-        }
-
-        // Phase 2: Batch resolve uncached modules
-        if (toResolve.length > 0) {
-          // Create shared resolution host to avoid recreation overhead
-          const resolutionHost = {
-            fileExists: (fileName: string) => fileName.includes('node_modules') 
-              ? fs.existsSync(fileName) 
-              : ts.sys.fileExists(fileName),
-            readFile: ts.sys.readFile,
-            directoryExists: ts.sys.directoryExists,
-            getDirectories: ts.sys.getDirectories,
-            realpath: ts.sys.realpath,
-            getCurrentDirectory: () => process.cwd(),
-          };
-
-          for (const { index, moduleName, cacheKey } of toResolve) {
-            let resolvedModule: ts.ResolvedModule | undefined;
-
-            try {
-              const result = ts.resolveModuleName(moduleName, containingFile, options, resolutionHost);
-              resolvedModule = result.resolvedModule;
-            } catch (error) {
-              // Fallback resolution on error
-              resolvedModule = fallbackResolveModule(moduleName);
-            }
-
-            // Try fallback if TypeScript resolution failed
-            if (!resolvedModule) {
-              resolvedModule = fallbackResolveModule(moduleName);
-            }
-
-            if (resolvedModule) {
-              // Cache the successful resolution
-              cacheResolvedModule(cacheKey, resolvedModule);
-            }
-
-            resolvedModules[index] = resolvedModule;
-          }
-        }
-
-        return resolvedModules;
-      },
+    // Create thread-safe optimized host with cached module resolution
+    const host = createOptimizedHost(inputCode, VIRTUAL_FILE, options);
+    
+    // Override writeFile to capture compiled output for this specific request
+    host.writeFile = (_: string, content: string) => {
+      compiledCode = content;
     };
 
-    // Fallback resolution for modules TypeScript can't resolve
-    const fallbackResolveModule = (moduleName: string): ts.ResolvedModule | undefined => {
-      try {
-        const modulePath = path.join(process.cwd(), 'node_modules', moduleName);
-        
-        // Check if the module directory exists first
-        if (!fs.existsSync(modulePath)) {
-          return undefined;
-        }
-        
-        const pkgJsonPath = path.join(modulePath, 'package.json');
-        
-        if (fs.existsSync(pkgJsonPath)) {
-          const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
-          
-          // Try multiple resolution paths in order of preference
-          const candidates = [
-            pkgJson.types,
-            pkgJson.typings,
-            pkgJson.main,
-            'index.d.ts',
-            'lib/index.d.ts',
-            'dist/index.d.ts'
-          ].filter(Boolean);
-          
-          for (const candidate of candidates) {
-            const resolvedPath = path.join(modulePath, candidate);
-            if (fs.existsSync(resolvedPath)) {
-              return {
-                resolvedFileName: resolvedPath,
-                isExternalLibraryImport: true,
-              };
-            }
-          }
-        }
-        
-        // Final fallback: try common patterns
-        const fallbackPaths = [
-          path.join(modulePath, 'index.d.ts'),
-          path.join(modulePath, 'index.ts'),
-          path.join(modulePath, 'lib', 'index.d.ts'),
-          path.join(modulePath, 'dist', 'index.d.ts')
-        ];
-        
-        for (const fallbackPath of fallbackPaths) {
-          if (fs.existsSync(fallbackPath)) {
-            return {
-              resolvedFileName: fallbackPath,
-              isExternalLibraryImport: true,
-            };
-          }
-        }
-        
-      } catch (error) {
-        // Silent fallback failure
-      }
-      
-      return undefined;
-    };
+
 
     timings.hostCreation = Date.now() - startTime - timings.setup - timings.hashing - timings.cacheCheck;
     
+    // Create NgProgram with optimized host (module resolution is cached internally)
     const ngProgram = new NgtscProgram([VIRTUAL_FILE], options, host);
     timings.programCreation = Date.now() - startTime - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
@@ -376,8 +202,6 @@ export const compileAngular = functions.https.onRequest(async (req, res) => {
       res.status(200).json(emitErrorResult);
       return;
     }
-
-    console.log('Raw compiled code:', compiledCode);
 
     // Parallel processing: clean code and format simultaneously
     const cleanedCode = removeNgDevModeBlocks(compiledCode);
