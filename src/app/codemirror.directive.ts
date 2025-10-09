@@ -3,7 +3,7 @@ import { EditorView, highlightActiveLine, lineNumbers } from '@codemirror/view';
 import { githubDark } from '@uiw/codemirror-theme-github';
 import { javascript } from '@codemirror/lang-javascript';
 import { minimalSetup } from 'codemirror';
-import { Compartment } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 
 @Directive({
   selector: '[appCodeMirror]',
@@ -32,6 +32,13 @@ export class CodeMirrorDirective implements OnInit {
       this.#editor.dispatch({
         effects: this.#language.reconfigure(this.hasDiagnostics() ? [] : javascript()),
       });
+
+      const editorElement = this.#editor.dom;
+      if (this.hasDiagnostics()) {
+        editorElement.classList.add('has-diagnostics');
+      } else {
+        editorElement.classList.remove('has-diagnostics');
+      }
     });
   }
 
@@ -61,7 +68,16 @@ export class CodeMirrorDirective implements OnInit {
         },
         ".cm-foldGutter": { display: "none" },
         ".cm-gutterElement": { pointerEvents: "none" },
+        '&.has-diagnostics .cm-line': {
+          color: '#a5d6ff'
+        },
+        '&.has-diagnostics .cm-content': {
+          color: '#a5d6ff'
+        },
       }),
+      EditorView.theme({
+
+      }, { dark: true }),
     ];
 
     if (this.isCodeEditor()) {
@@ -75,6 +91,9 @@ export class CodeMirrorDirective implements OnInit {
           });
         },
       }));
+    } else {
+      // Make editor readonly when it's not a code editor
+      extensions.push(EditorState.readOnly.of(true));
     }
 
     this.#editor = new EditorView({

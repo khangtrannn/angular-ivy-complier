@@ -25,8 +25,8 @@
       </div>
 
       <div class="compiled-code-button-wrapper">
-        <button (click)="compileCode(codeMirror.doc)" [attr.text]="isCompiling() ? 'Compiling...' : 'Compile Code'"
-          class="compile-code-btn primary-btn">{{ isCompiling() ? 'Compiling...' : 'Compile Code' }}</button>
+        <button (click)="compileCode(codeMirror.doc)" [attr.text]="isCompiling() ? 'Compiling' : 'Compile Code'"
+          class="compile-code-btn primary-btn">{{ isCompiling() ? 'Compiling' : 'Compile Code' }}</button>
       </div>
     </div>
 
@@ -40,8 +40,12 @@
             <div class="skeleton-line skeleton-line-short"></div>
             <div class="skeleton-line skeleton-line-medium"></div>
             <div class="skeleton-line skeleton-line-long"></div>
+            <div class="skeleton-line skeleton-line-medium"></div>
             <div class="skeleton-line skeleton-line-short"></div>
             <div class="skeleton-line skeleton-line-medium"></div>
+            <div class="skeleton-line skeleton-line-long"></div>
+            <div class="skeleton-line skeleton-line-medium"></div>
+            <div class="skeleton-line skeleton-line-short"></div>
           </div>
         </div>
       </div>

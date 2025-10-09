@@ -183,6 +183,10 @@
   min-height: fit-content;
   height: calc(100vh - 125px);
 
+  &.has-diagnostics {
+    color: #a5d6ff;
+  }
+
   .error {
     padding: 10px;
     font-size: 14px;
