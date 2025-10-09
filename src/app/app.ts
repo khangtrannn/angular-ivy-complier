@@ -68,7 +68,8 @@ export class App {
       
       this.isSkeletonFadingOut.set(true);
       
-      // Wait for fade-out animation to complete before starting stream
+      // Always use the same animation timing for consistent UX
+      // Whether from cache or fresh compilation
       setTimeout(() => {
         this.compiledCode.set(result.compiledOutput);
         this.hasDiagnostics.set(result.hasDiagnostics);
@@ -79,7 +80,10 @@ export class App {
         // Count lines and start streaming effect
         const lines = result.compiledOutput.split('\n');
         this.totalLines.set(lines.length);
-        this.startTypewriterEffect(lines.length);
+        
+        // Use faster animation for cached results but still smooth
+        const isCached = result.fromCache || false;
+        this.startTypewriterEffect(lines.length, isCached);
       }, 300); // Match CSS transition duration
       
     } catch (error: any) {
@@ -93,7 +97,7 @@ export class App {
     }
   }
 
-  private startTypewriterEffect(totalLines: number) {
+  private startTypewriterEffect(totalLines: number, isCached: boolean = false) {
     this.isStreaming.set(true);
     this.streamingProgress.set(0);
     
@@ -104,20 +108,22 @@ export class App {
         currentLine++;
         this.streamingProgress.set((currentLine / totalLines) * 100);
         
-        // Base delay of 80ms per line, with some variation
-        const delay = 60 + Math.random() * 40; // 60-100ms
+        // Faster animation for cached results, but still smooth
+        const baseDelay = isCached ? 30 : 60; // Cached: 30-50ms, Fresh: 60-100ms
+        const variation = isCached ? 20 : 40;
+        const delay = baseDelay + Math.random() * variation;
         
         setTimeout(revealNextLine, delay);
       } else {
         // Streaming complete
         setTimeout(() => {
           this.isStreaming.set(false);
-        }, 500); // Brief pause before switching to full editor
+        }, isCached ? 300 : 500); // Shorter pause for cached results
       }
     };
     
-    // Start revealing after a short delay
-    setTimeout(revealNextLine, 100);
+    // Start revealing after a short delay (faster for cached)
+    setTimeout(revealNextLine, isCached ? 50 : 100);
   }
 
   protected selectTemplate(event: Event) {
