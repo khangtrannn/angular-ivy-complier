@@ -17,7 +17,6 @@ export interface CompileResponse {
 }
 
 // Cache configuration
-export const MODULE_RESOLUTION_TTL = Infinity; // Cache modules permanently
 export const MAX_CACHE_SIZE = 1000;
 
 // Common Angular modules to pre-cache (prioritized by usage frequency)
@@ -27,7 +26,6 @@ export const COMMON_ANGULAR_MODULES = [
   '@angular/common', // Common directives
   '@angular/platform-browser', // Browser-specific features
   'rxjs', // Reactive programming
-  // Removed less common modules to speed up pre-warming
 ];
 
 // Cache instances
@@ -226,67 +224,111 @@ export const preWarmModuleCache = async (sharedCompilerOptions: ts.CompilerOptio
   functions.logger.info(`📊 Pre-warmed ${preWarmedCount} modules in ${warmupTime}ms`);
 };
 
-/**
- * Create a thread-safe host factory that reuses expensive parts
- */
-export const createOptimizedHost = (inputCode: string, virtualFile: string, options: ts.CompilerOptions): ts.CompilerHost => {
-  // Start from the default host so Angular's wrapper can inject shims/TCBs correctly
-  const host = ts.createCompilerHost(options, /* setParentNodes */ true);
+const matchesTypeScriptLibFilePattern = (fileName: string): boolean => {
+  return fileName.startsWith('lib.') && fileName.endsWith('.d.ts');
+};
 
-  const baseFileExists = host.fileExists.bind(host);
-  const baseReadFile = host.readFile.bind(host);
-  const vAbs = require('path').resolve(virtualFile);
+const buildTypeScriptLibFilePath = (fileName: string): string => {
+  const path = require('path');
+  return path.join(__dirname, '..', 'node_modules', 'typescript', 'lib', fileName);
+};
 
-  host.fileExists = (fileName: string) => {
-    const fAbs = require('path').resolve(fileName);
-    if (fileName === virtualFile || fAbs === vAbs) return true;
+const matchesVirtualFileNameOrPath = (fileName: string, virtualFile: string, virtualAbsPath: string): boolean => {
+  const fileAbsPath = require('path').resolve(fileName);
+  return fileName === virtualFile || fileAbsPath === virtualAbsPath;
+};
+
+const buildOptimizedFileExistsChecker = (
+  virtualFile: string, 
+  virtualAbsPath: string, 
+  baseFileExists: ts.CompilerHost['fileExists']
+) => {
+  return (fileName: string): boolean => {
+    if (matchesVirtualFileNameOrPath(fileName, virtualFile, virtualAbsPath)) {
+      return true;
+    }
     
-    // Handle TypeScript lib files
-    if (fileName.startsWith('lib.') && fileName.endsWith('.d.ts')) {
-      const path = require('path');
-      const libPath = path.join(__dirname, '..', 'node_modules', 'typescript', 'lib', fileName);
+    if (matchesTypeScriptLibFilePattern(fileName)) {
       const fs = require('fs');
+      const libPath = buildTypeScriptLibFilePath(fileName);
       return fs.existsSync(libPath);
     }
     
     return baseFileExists(fileName);
   };
+};
 
-  host.readFile = (fileName: string) => {
-    const fAbs = require('path').resolve(fileName);
-    if (fileName === virtualFile || fAbs === vAbs) return inputCode;
+const buildOptimizedFileContentReader = (
+  inputCode: string,
+  virtualFile: string,
+  virtualAbsPath: string,
+  baseReadFile: ts.CompilerHost['readFile']
+) => {
+  return (fileName: string): string | undefined => {
+    if (matchesVirtualFileNameOrPath(fileName, virtualFile, virtualAbsPath)) {
+      return inputCode;
+    }
     
-    // Handle TypeScript lib files
-    if (fileName.startsWith('lib.') && fileName.endsWith('.d.ts')) {
-      const path = require('path');
+    if (matchesTypeScriptLibFilePattern(fileName)) {
       const fs = require('fs');
-      const libPath = path.join(__dirname, '..', 'node_modules', 'typescript', 'lib', fileName);
+      const libPath = buildTypeScriptLibFilePath(fileName);
       if (fs.existsSync(libPath)) {
         return fs.readFileSync(libPath, 'utf8');
       }
     }
     
-    try {
-      // Cache file reads for better performance (only for stable deps)
-      const cachedContent = getCachedFileContent(fileName);
-      if (cachedContent) return cachedContent;
-      const content = baseReadFile(fileName);
-      if (content) cacheFileContent(fileName, content);
-      return content;
-    } catch {
-      return baseReadFile(fileName);
-    }
+    return tryReadFileFromCacheOrDisk(fileName, baseReadFile);
   };
+};
 
-  // Keep writeFile passthrough; caller may override to capture output
-  const originalWriteFile = host.writeFile.bind(host);
-  host.writeFile = (fileName: string, content: string, ...rest: any[]) => {
+const tryReadFileFromCacheOrDisk = (
+  fileName: string, 
+  baseReadFile: ts.CompilerHost['readFile']
+): string | undefined => {
+  try {
+    const cachedContent = getCachedFileContent(fileName);
+    if (cachedContent) {
+      return cachedContent;
+    }
+    
+    const content = baseReadFile(fileName);
+    if (content) {
+      cacheFileContent(fileName, content);
+    }
+    
+    return content;
+  } catch {
+    return baseReadFile(fileName);
+  }
+};
+
+const buildPassthroughFileWriter = (originalWriteFile: ts.CompilerHost['writeFile']) => {
+  return (fileName: string, content: string, ...rest: any[]): void => {
     originalWriteFile(fileName, content, ...(rest as [any]));
   };
+};
 
+export const createOptimizedHost = (
+  inputCode: string, 
+  virtualFile: string, 
+  options: ts.CompilerOptions
+): ts.CompilerHost => {
+  // Start from the default host so Angular's wrapper can inject shims/TCBs correctly
+  const host = ts.createCompilerHost(options, /* setParentNodes */ true);
+
+  // Cache base methods and virtual file path
+  const baseFileExists = host.fileExists.bind(host);
+  const baseReadFile = host.readFile.bind(host);
+  const originalWriteFile = host.writeFile.bind(host);
+  const virtualAbsPath = require('path').resolve(virtualFile);
+
+  // Override host methods with optimized implementations
+  host.fileExists = buildOptimizedFileExistsChecker(virtualFile, virtualAbsPath, baseFileExists);
+  host.readFile = buildOptimizedFileContentReader(inputCode, virtualFile, virtualAbsPath, baseReadFile);
+  host.writeFile = buildPassthroughFileWriter(originalWriteFile);
+  
   // Override getDefaultLibFileName to ensure proper lib resolution
   host.getDefaultLibFileName = (options: ts.CompilerOptions) => {
-    // Use TypeScript's built-in logic for lib file resolution
     return ts.getDefaultLibFileName(options);
   };
 
@@ -472,6 +514,5 @@ export const getCacheStats = () => {
     compilationCacheSize: compilationCache.size,
     tsProgramCacheSize: tsProgramCache.size,
     totalCachedModules: enhancedModuleCache.size + modulePathCache.size,
-    permanentCaching: MODULE_RESOLUTION_TTL === Infinity
   };
 };
