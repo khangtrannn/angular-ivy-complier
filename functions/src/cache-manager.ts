@@ -45,7 +45,6 @@ export interface CachedTsProgram {
 }
 
 const tsProgramCache = new Map<string, CachedTsProgram>();
-const TS_PROGRAM_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Optimize cache key generation for better performance
@@ -103,13 +102,6 @@ export const cacheResolvedModule = (
     // Always remove from resolving set
     resolvingModules.delete(cacheKey);
   }
-};
-
-/**
- * Check if a module is currently being resolved
- */
-const isModuleBeingResolved = (cacheKey: string): boolean => {
-  return resolvingModules.has(cacheKey);
 };
 
 /**
@@ -249,12 +241,32 @@ export const createOptimizedHost = (inputCode: string, virtualFile: string, opti
   host.fileExists = (fileName: string) => {
     const fAbs = require('path').resolve(fileName);
     if (fileName === virtualFile || fAbs === vAbs) return true;
+    
+    // Handle TypeScript lib files
+    if (fileName.startsWith('lib.') && fileName.endsWith('.d.ts')) {
+      const path = require('path');
+      const libPath = path.join(__dirname, '..', 'node_modules', 'typescript', 'lib', fileName);
+      const fs = require('fs');
+      return fs.existsSync(libPath);
+    }
+    
     return baseFileExists(fileName);
   };
 
   host.readFile = (fileName: string) => {
     const fAbs = require('path').resolve(fileName);
     if (fileName === virtualFile || fAbs === vAbs) return inputCode;
+    
+    // Handle TypeScript lib files
+    if (fileName.startsWith('lib.') && fileName.endsWith('.d.ts')) {
+      const path = require('path');
+      const fs = require('fs');
+      const libPath = path.join(__dirname, '..', 'node_modules', 'typescript', 'lib', fileName);
+      if (fs.existsSync(libPath)) {
+        return fs.readFileSync(libPath, 'utf8');
+      }
+    }
+    
     try {
       // Cache file reads for better performance (only for stable deps)
       const cachedContent = getCachedFileContent(fileName);
@@ -271,6 +283,12 @@ export const createOptimizedHost = (inputCode: string, virtualFile: string, opti
   const originalWriteFile = host.writeFile.bind(host);
   host.writeFile = (fileName: string, content: string, ...rest: any[]) => {
     originalWriteFile(fileName, content, ...(rest as [any]));
+  };
+
+  // Override getDefaultLibFileName to ensure proper lib resolution
+  host.getDefaultLibFileName = (options: ts.CompilerOptions) => {
+    // Use TypeScript's built-in logic for lib file resolution
+    return ts.getDefaultLibFileName(options);
   };
 
   return host;

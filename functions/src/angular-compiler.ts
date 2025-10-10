@@ -21,8 +21,8 @@ const sharedCompilerOptions: ts.CompilerOptions = {
   module: ts.ModuleKind.ES2022,
   target: ts.ScriptTarget.ES2022,
   moduleResolution: ts.ModuleResolutionKind.Node10,
-  skipLibCheck: true,
-  skipDefaultLibCheck: true,
+  skipLibCheck: true, // Skip lib checking for faster compilation but enable template checking
+  skipDefaultLibCheck: true, // Skip default lib checking
   sourceMap: false,
   // Required for Angular decorators
   experimentalDecorators: true,
@@ -62,12 +62,15 @@ const angularCompilerOptions: Partial<NgcCompilerOptions> = {
   strictLiteralTypes: true,
   enableBlockSyntax: true,
   enableLetSyntax: true,
-  // Ensure TCBs are generated
+  // CRITICAL: Ensure template type checker is enabled
   enableTemplateTypeChecker: true,
   // Report additional template issues like unknown members
   extendedTemplateDiagnostics: true as any,
   // Force full AOT compilation for apps (needed for template type checking)
   compilationMode: 'full',
+  // Additional options that might be needed for template type checking
+  allowEmptyCodegenFiles: true,
+  generateDeepReexports: false,
 };
 
 // Pre-warm the module cache when the module loads (once per instance)
@@ -166,7 +169,15 @@ export const compileAngular = functions.https.onRequest({
   const ngProgram = new NgtscProgram([VIRTUAL_FILE], ngCompilerOptions, host);
     timings.programCreation = Date.now() - startTime - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
+    // CRITICAL: Force template type checking by analyzing the program
+    // This ensures Template Type Check blocks (TCBs) are generated
     await ngProgram.compiler.analyzeAsync();
+    
+    // Force template diagnostics generation by accessing template type checker
+    const compiler = ngProgram.compiler as any;
+    if (compiler.ensureAllShimsForAllFiles) {
+      compiler.ensureAllShimsForAllFiles();
+    }
     timings.analysis = Date.now() - startTime - timings.programCreation - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
     // Gather all diagnostics including Angular template type-checking
@@ -180,12 +191,21 @@ export const compileAngular = functions.https.onRequest({
       ? (ngProgram.getNgSemanticDiagnostics(sourceFile.fileName) as ts.Diagnostic[])
       : (ngProgram.getNgSemanticDiagnostics?.() as ts.Diagnostic[] | undefined) ?? [];
 
-    // Include Angular Template Type Checker diagnostics for this file only
-    const ttc = (ngProgram.compiler as any).getTemplateTypeChecker?.();
-    const templateDiagnostics: ts.Diagnostic[] =
-      sourceFile && ttc && typeof ttc.getDiagnosticsForFile === 'function'
-        ? (ttc.getDiagnosticsForFile(sourceFile) as ts.Diagnostic[])
-        : [];
+    // Get template diagnostics through Angular's diagnostic system
+    // Note: Template type checking diagnostics are usually included in ngSemanticDiagnostics
+    // when enableTemplateTypeChecker is true, but let's also try to get them explicitly
+    let templateDiagnostics: ts.Diagnostic[] = [];
+    try {
+      // Try to get template type checker diagnostics if available
+      const ttc = (ngProgram.compiler as any).getTemplateTypeChecker?.();
+      if (sourceFile && ttc && typeof ttc.getDiagnosticsForFile === 'function') {
+        templateDiagnostics = ttc.getDiagnosticsForFile(sourceFile) as ts.Diagnostic[];
+      }
+    } catch (error) {
+      // Template type checker might not be available - this is okay
+      // Template diagnostics should be included in ngSemanticDiagnostics instead
+      functions.logger.debug('Template type checker not available:', error instanceof Error ? error.message : 'Unknown error');
+    }
 
     const allDiagnostics: ts.Diagnostic[] = [
       ...syntacticDiagnostics,
@@ -331,9 +351,6 @@ function removeNgDevModeBlocks(code: string): string {
   );
 }
 
-// Simple, best-effort template checker as a fallback when Angular doesn't emit template diagnostics
-// Removed naive fallback diagnostics to rely on Angular diagnostics
-
 // Shorten diagnostic file paths for readability, e.g., show "/main.ts" instead of full absolute path
 function formatDiagnosticFilePath(fileName: string): string {
   try {
@@ -358,7 +375,3 @@ function formatDiagnosticFilePath(fileName: string): string {
     return `/${path.basename(fileName)}`;
   }
 }
-
-// Augment user code so Angular generates template type-checking code (TCBs)
-// by providing a compilation context for both standalone and non-standalone components.
-// (augmentation helper removed)
