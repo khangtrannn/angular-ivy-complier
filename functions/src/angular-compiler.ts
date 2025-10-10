@@ -16,7 +16,6 @@ import {
 // Global virtual entry file path used across the module (must be absolute for Angular)
 const VIRTUAL_FILE = path.resolve(process.cwd(), 'main.ts');
 
-// Reusable TypeScript compiler options (used for compiling user code)
 const sharedCompilerOptions: ts.CompilerOptions = {
   module: ts.ModuleKind.ES2022,
   target: ts.ScriptTarget.ES2022,
@@ -24,18 +23,22 @@ const sharedCompilerOptions: ts.CompilerOptions = {
   skipLibCheck: true, // Skip lib checking for faster compilation but enable template checking
   skipDefaultLibCheck: true, // Skip default lib checking
   sourceMap: false,
+
   // Required for Angular decorators
   experimentalDecorators: true,
   emitDecoratorMetadata: true,
+
   // Helpful strictness that doesn't slow down much
   strict: true,
   noImplicitOverride: true,
   noPropertyAccessFromIndexSignature: true,
   noFallthroughCasesInSwitch: true,
+
   // Performance optimizations
   isolatedModules: true,
   assumeChangesOnlyAffectDirectDependencies: true,
   disableSourceOfProjectReferenceRedirect: true,
+
   // Skip unnecessary checks for faster compilation
   noResolve: false, // Keep this false for Angular imports
   noImplicitAny: false, // Allow implicit any for faster compilation
@@ -49,6 +52,7 @@ const angularCompilerOptions: Partial<NgcCompilerOptions> = {
   strictInjectionParameters: true,
   strictInputAccessModifiers: true,
   typeCheckHostBindings: true,
+
   // Strict template type checking flags
   strictTemplates: true,
   strictAttributeTypes: true,
@@ -62,6 +66,7 @@ const angularCompilerOptions: Partial<NgcCompilerOptions> = {
   strictLiteralTypes: true,
   enableBlockSyntax: true,
   enableLetSyntax: true,
+
   // CRITICAL: Ensure template type checker is enabled
   enableTemplateTypeChecker: true,
   // Report additional template issues like unknown members
@@ -88,7 +93,6 @@ export const compileAngular = functions.https.onRequest({
   maxInstances: 3,
   minInstances: 0, // No always-on cost
 }, async (req, res) => {
-  // Enable CORS
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type');
@@ -107,7 +111,7 @@ export const compileAngular = functions.https.onRequest({
   const timings: Record<string, number> = {};
 
   try {
-  const { code: inputCode } = req.body;
+    const { code: inputCode } = req.body;
 
     if (!inputCode) {
       res.status(400).json({ error: 'Code is required' });
@@ -125,30 +129,19 @@ export const compileAngular = functions.https.onRequest({
     timings.cacheCheck = Date.now() - startTime - timings.setup - timings.hashing;
 
     if (cachedResult) {
-      const compilationTime = Date.now() - startTime;
-
-      // Log cache hit for monitoring
-      functions.logger.info(`Cache hit in ${compilationTime}ms`, {
-        fromCache: true,
-        timings,
-        codeLength: inputCode.length
-      });
-
       res.status(200).json({
         ...cachedResult,
-        compilationTime,
+        compilationTime: Date.now() - startTime,
         fromCache: true,
         timings
       });
       return;
     }
 
-    const options = sharedCompilerOptions;
+    let compiledCode = '';
 
-  let compiledCode = '';
-
-  // Create thread-safe optimized host with cached module resolution
-  const host = createOptimizedHost(inputCode, VIRTUAL_FILE, options);
+    // Create thread-safe optimized host with cached module resolution
+    const host = createOptimizedHost(inputCode, VIRTUAL_FILE, sharedCompilerOptions);
 
     // Override writeFile to capture compiled output for this specific request
     host.writeFile = (_: string, content: string) => {
@@ -157,22 +150,21 @@ export const compileAngular = functions.https.onRequest({
 
     // Add performance logging for host creation
     timings.hostCreation = Date.now() - startTime - timings.setup - timings.hashing - timings.cacheCheck;
-    functions.logger.debug(`Host created in ${timings.hostCreation}ms`);
 
     // Merge TS options with Angular compiler options for strict template checking (typed)
     const ngCompilerOptions: ts.CompilerOptions & NgcCompilerOptions = {
-      ...options,
+      ...sharedCompilerOptions,
       ...angularCompilerOptions,
     } as ts.CompilerOptions & NgcCompilerOptions;
 
-  // Create NgProgram with optimized host (module resolution is cached internally)
-  const ngProgram = new NgtscProgram([VIRTUAL_FILE], ngCompilerOptions, host);
+    // Create NgProgram with optimized host (module resolution is cached internally)
+    const ngProgram = new NgtscProgram([VIRTUAL_FILE], ngCompilerOptions, host);
     timings.programCreation = Date.now() - startTime - timings.hostCreation - timings.cacheCheck - timings.hashing - timings.setup;
 
     // CRITICAL: Force template type checking by analyzing the program
     // This ensures Template Type Check blocks (TCBs) are generated
     await ngProgram.compiler.analyzeAsync();
-    
+
     // Force template diagnostics generation by accessing template type checker
     const compiler = ngProgram.compiler as any;
     if (compiler.ensureAllShimsForAllFiles) {
@@ -191,29 +183,12 @@ export const compileAngular = functions.https.onRequest({
       ? (ngProgram.getNgSemanticDiagnostics(sourceFile.fileName) as ts.Diagnostic[])
       : (ngProgram.getNgSemanticDiagnostics?.() as ts.Diagnostic[] | undefined) ?? [];
 
-    // Get template diagnostics through Angular's diagnostic system
-    // Note: Template type checking diagnostics are usually included in ngSemanticDiagnostics
-    // when enableTemplateTypeChecker is true, but let's also try to get them explicitly
-    let templateDiagnostics: ts.Diagnostic[] = [];
-    try {
-      // Try to get template type checker diagnostics if available
-      const ttc = (ngProgram.compiler as any).getTemplateTypeChecker?.();
-      if (sourceFile && ttc && typeof ttc.getDiagnosticsForFile === 'function') {
-        templateDiagnostics = ttc.getDiagnosticsForFile(sourceFile) as ts.Diagnostic[];
-      }
-    } catch (error) {
-      // Template type checker might not be available - this is okay
-      // Template diagnostics should be included in ngSemanticDiagnostics instead
-      functions.logger.debug('Template type checker not available:', error instanceof Error ? error.message : 'Unknown error');
-    }
-
     const allDiagnostics: ts.Diagnostic[] = [
       ...syntacticDiagnostics,
       ...semanticDiagnostics,
       ...optionsDiagnostics,
       ...ngStructuralDiagnostics,
       ...ngSemanticDiagnostics,
-      ...templateDiagnostics,
     ];
 
     if (allDiagnostics.length > 0) {
@@ -241,7 +216,6 @@ export const compileAngular = functions.https.onRequest({
         timings
       };
 
-      // Cache error results too (first error case)
       cacheCompilation(codeHash, {
         compiledOutput: diagnosticText,
         hasDiagnostics: true
@@ -280,7 +254,6 @@ export const compileAngular = functions.https.onRequest({
         timings
       };
 
-      // Cache emit error results too (second error case)
       cacheCompilation(codeHash, {
         compiledOutput: diagnosticText,
         hasDiagnostics: true
@@ -325,17 +298,8 @@ export const compileAngular = functions.https.onRequest({
       hasDiagnostics: false
     });
 
-    // Log performance metrics for monitoring
-    functions.logger.info(`Compilation completed in ${compilationTime}ms`, {
-      fromCache: false,
-      timings,
-      codeLength: inputCode.length,
-      outputLength: formattedCode.length
-    });
-
     res.status(200).json(result);
   } catch (err) {
-    functions.logger.error('Compilation error:', err);
     res.status(500).json({
       error: 'Internal server error',
       message: err instanceof Error ? err.message : 'Unknown error',
