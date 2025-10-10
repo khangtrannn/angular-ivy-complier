@@ -65,6 +65,34 @@ export class CodeMirrorDirective implements OnInit {
         '.cm-scroller': {
           fontFamily: "'SF Mono', Monaco, Menlo, Consolas, 'Ubuntu Mono', monospace",
           lineHeight: '20px',
+          // Firefox scrollbar
+          scrollbarWidth: 'thin',
+          scrollbarColor: '#484848 transparent',
+          // Webkit scrollbar
+          '&::-webkit-scrollbar': {
+            width: '8px',
+            height: '8px',
+            backgroundColor: 'transparent',
+          },
+          '&::-webkit-scrollbar-thumb': {
+            backgroundColor: '#484848',
+            borderRadius: '4px',
+            border: 'none',
+            minHeight: '20px',
+          },
+          '&::-webkit-scrollbar-thumb:hover': {
+            backgroundColor: '#6c6c6c',
+          },
+          '&::-webkit-scrollbar-thumb:active': {
+            backgroundColor: '#888888',
+          },
+          '&::-webkit-scrollbar-track': {
+            backgroundColor: 'transparent',
+            borderRadius: '4px',
+          },
+          '&::-webkit-scrollbar-corner': {
+            backgroundColor: 'transparent',
+          },
         },
         '.cm-content': {
           padding: '8px 0',

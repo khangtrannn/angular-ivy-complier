@@ -179,7 +179,7 @@
     }
   }
 
-  .editor-content {
+    .editor-content {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1px;
@@ -329,7 +329,6 @@
 // CodeMirror typewriter effect
 .codemirror-container {
   position: relative;
-  height: calc(100vh - 190px); // Adjusted for the header
   overflow: hidden;
   flex: 1;
   
