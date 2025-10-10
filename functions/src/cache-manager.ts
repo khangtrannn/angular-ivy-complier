@@ -239,55 +239,38 @@ export const preWarmModuleCache = async (sharedCompilerOptions: ts.CompilerOptio
  * Create a thread-safe host factory that reuses expensive parts
  */
 export const createOptimizedHost = (inputCode: string, virtualFile: string, options: ts.CompilerOptions): ts.CompilerHost => {
-  const host: ts.CompilerHost = {
-    getDefaultLibFileName: (opts: ts.CompilerOptions) => {
-      return ts.getDefaultLibFilePath(opts);
-    },
-    getCurrentDirectory: () => process.cwd(),
-    getDirectories: (pathStr: string) => ts.sys.getDirectories(pathStr),
-    directoryExists: (dirName: string) => ts.sys.directoryExists(dirName),
-    fileExists: (fileName: string) => {
-      if (fileName === virtualFile) return true;
-      return ts.sys.fileExists(fileName);
-    },
-    readFile: (fileName: string) => {
-      if (fileName === virtualFile) return inputCode;
-      
-      try {
-        // Cache file reads for better performance
-        const cachedContent = getCachedFileContent(fileName);
-        if (cachedContent) {
-          return cachedContent;
-        }
-        
-        const content = ts.sys.readFile(fileName);
-        if (content) {
-          cacheFileContent(fileName, content);
-        }
-        return content;
-      } catch (error) {
-        // Fallback to direct file read if caching fails
-        return ts.sys.readFile(fileName);
-      }
-    },
-    getCanonicalFileName: (fileName: string) =>
-      ts.sys.useCaseSensitiveFileNames ? fileName : fileName.toLowerCase(),
-    useCaseSensitiveFileNames: () => !!ts.sys.useCaseSensitiveFileNames,
-    getNewLine: () => ts.sys.newLine,
-    writeFile: (_: string, content: string) => {
-      // This will be overwritten per request
-    },
-    getSourceFile(fileName: string, languageVersion: ts.ScriptTarget): ts.SourceFile | undefined {
-      if (fileName === virtualFile) {
-        return ts.createSourceFile(fileName, inputCode, languageVersion, true);
-      }
+  // Start from the default host so Angular's wrapper can inject shims/TCBs correctly
+  const host = ts.createCompilerHost(options, /* setParentNodes */ true);
 
-      const content = ts.sys.readFile(fileName);
-      return content
-        ? ts.createSourceFile(fileName, content, languageVersion, true)
-        : undefined;
-    },
-    resolveModuleNames: createCachedModuleResolver(options)
+  const baseFileExists = host.fileExists.bind(host);
+  const baseReadFile = host.readFile.bind(host);
+  const vAbs = require('path').resolve(virtualFile);
+
+  host.fileExists = (fileName: string) => {
+    const fAbs = require('path').resolve(fileName);
+    if (fileName === virtualFile || fAbs === vAbs) return true;
+    return baseFileExists(fileName);
+  };
+
+  host.readFile = (fileName: string) => {
+    const fAbs = require('path').resolve(fileName);
+    if (fileName === virtualFile || fAbs === vAbs) return inputCode;
+    try {
+      // Cache file reads for better performance (only for stable deps)
+      const cachedContent = getCachedFileContent(fileName);
+      if (cachedContent) return cachedContent;
+      const content = baseReadFile(fileName);
+      if (content) cacheFileContent(fileName, content);
+      return content;
+    } catch {
+      return baseReadFile(fileName);
+    }
+  };
+
+  // Keep writeFile passthrough; caller may override to capture output
+  const originalWriteFile = host.writeFile.bind(host);
+  host.writeFile = (fileName: string, content: string, ...rest: any[]) => {
+    originalWriteFile(fileName, content, ...(rest as [any]));
   };
 
   return host;
