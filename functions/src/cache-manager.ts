@@ -23,9 +23,13 @@ export const MAX_CACHE_SIZE = 1000;
 export const COMMON_ANGULAR_MODULES = [
   '@angular/core', // Most critical - always needed
   'typescript', // TypeScript definitions
-  '@angular/common', // Common directives
+  '@angular/common', // Common directives and pipes like DatePipe
   '@angular/platform-browser', // Browser-specific features
+  '@angular/forms', // Form controls and validation
+  '@angular/router', // Routing functionality
   'rxjs', // Reactive programming
+  'zone.js', // Zone.js for change detection
+  'tslib', // TypeScript runtime helpers
 ];
 
 // Cache instances
