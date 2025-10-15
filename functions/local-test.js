@@ -17,7 +17,19 @@ function mockReqRes(body) {
 }
 
 async function run() {
-  const code = `import { Component } from '@angular/core';\n\n@Component({\n  selector: 'app-root',\n  standalone: true,\n  template: '<h1>{{ title }}</h1>',\n})\nexport class App {\n}`;
+  const code = `import { Component, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
+
+@Component({
+  selector: 'app-root',
+  template: \`<span [textContent]="time | date:'hh:mm:ss:SSS'"></span>\`,
+  imports: [DatePipe]
+})
+export class App {
+  get time() {
+    return Date.now();
+  }
+}`;
   const { req, res } = mockReqRes({ code });
 
   // compileAngular is an onRequest handler wrapper, call the function directly

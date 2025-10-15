@@ -347,58 +347,68 @@ const fallbackResolveModule = (moduleName: string): ts.ResolvedModule | undefine
     const path = require('path');
     const fs = require('fs');
     
-    const modulePath = path.join(process.cwd(), 'node_modules', moduleName);
+    // First try the functions directory (where we're running)
+    const functionsNodeModulesPath = path.join(process.cwd(), 'node_modules', moduleName);
     
-    // Check if the module directory exists first
-    if (!fs.existsSync(modulePath)) {
-      return undefined;
-    }
+    // Also try the parent directory's node_modules in case of different working directories
+    const parentNodeModulesPath = path.join(process.cwd(), '..', 'node_modules', moduleName);
     
-    const pkgJsonPath = path.join(modulePath, 'package.json');
+    const candidatePaths = [functionsNodeModulesPath, parentNodeModulesPath];
     
-    if (fs.existsSync(pkgJsonPath)) {
-      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+    for (const modulePath of candidatePaths) {
+      // Check if the module directory exists first
+      if (!fs.existsSync(modulePath)) {
+        continue;
+      }
       
-      // Try multiple resolution paths in order of preference
-      const candidates = [
-        pkgJson.types,
-        pkgJson.typings,
-        pkgJson.main,
-        'index.d.ts',
-        'lib/index.d.ts',
-        'dist/index.d.ts'
-      ].filter(Boolean);
+      const pkgJsonPath = path.join(modulePath, 'package.json');
       
-      for (const candidate of candidates) {
-        const resolvedPath = path.join(modulePath, candidate);
-        if (fs.existsSync(resolvedPath)) {
+      if (fs.existsSync(pkgJsonPath)) {
+        const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+        
+        // Try multiple resolution paths in order of preference
+        const candidates = [
+          pkgJson.types,
+          pkgJson.typings,
+          pkgJson.main,
+          'index.d.ts',
+          'lib/index.d.ts',
+          'dist/index.d.ts'
+        ].filter(Boolean);
+        
+        for (const candidate of candidates) {
+          const resolvedPath = path.join(modulePath, candidate);
+          if (fs.existsSync(resolvedPath)) {
+            functions.logger.debug(`Fallback resolved ${moduleName} to ${resolvedPath}`);
+            return {
+              resolvedFileName: resolvedPath,
+              isExternalLibraryImport: true,
+            };
+          }
+        }
+      }
+      
+      // Final fallback: try common patterns
+      const fallbackPaths = [
+        path.join(modulePath, 'index.d.ts'),
+        path.join(modulePath, 'index.ts'),
+        path.join(modulePath, 'lib', 'index.d.ts'),
+        path.join(modulePath, 'dist', 'index.d.ts')
+      ];
+      
+      for (const fallbackPath of fallbackPaths) {
+        if (fs.existsSync(fallbackPath)) {
+          functions.logger.debug(`Fallback resolved ${moduleName} to ${fallbackPath}`);
           return {
-            resolvedFileName: resolvedPath,
+            resolvedFileName: fallbackPath,
             isExternalLibraryImport: true,
           };
         }
       }
     }
     
-    // Final fallback: try common patterns
-    const fallbackPaths = [
-      path.join(modulePath, 'index.d.ts'),
-      path.join(modulePath, 'index.ts'),
-      path.join(modulePath, 'lib', 'index.d.ts'),
-      path.join(modulePath, 'dist', 'index.d.ts')
-    ];
-    
-    for (const fallbackPath of fallbackPaths) {
-      if (fs.existsSync(fallbackPath)) {
-        return {
-          resolvedFileName: fallbackPath,
-          isExternalLibraryImport: true,
-        };
-      }
-    }
-    
   } catch (error) {
-    // Silent fallback failure
+    functions.logger.warn(`Fallback resolution failed for ${moduleName}:`, error);
   }
   
   return undefined;
@@ -448,10 +458,18 @@ const createCachedModuleResolver = (options: ts.CompilerOptions) => {
     // Phase 2: Batch resolve uncached modules
     if (toResolve.length > 0) {
       // Create shared resolution host to avoid recreation overhead
-      const resolutionHost = {
-        fileExists: (fileName: string) => fileName.includes('node_modules') 
-          ? require('fs').existsSync(fileName) 
-          : ts.sys.fileExists(fileName),
+      const resolutionHost: ts.ModuleResolutionHost = {
+        fileExists: (fileName: string) => {
+          if (fileName.includes('node_modules')) {
+            const fs = require('fs');
+            const exists = fs.existsSync(fileName);
+            if (!exists && fileName.includes('@angular')) {
+              functions.logger.debug(`Module file not found: ${fileName}`);
+            }
+            return exists;
+          }
+          return ts.sys.fileExists(fileName);
+        },
         readFile: ts.sys.readFile,
         directoryExists: ts.sys.directoryExists,
         getDirectories: ts.sys.getDirectories,
@@ -481,13 +499,20 @@ const createCachedModuleResolver = (options: ts.CompilerOptions) => {
         try {
           const result = ts.resolveModuleName(moduleName, containingFile, options, resolutionHost);
           resolvedModule = result.resolvedModule;
+          
+          if (!resolvedModule && moduleName.startsWith('@angular')) {
+            functions.logger.debug(`TypeScript failed to resolve Angular module: ${moduleName} from ${containingFile}`);
+            functions.logger.debug(`Resolution result:`, result);
+          }
         } catch (error) {
+          functions.logger.warn(`Module resolution error for ${moduleName}:`, error);
           // Fallback resolution on error
           resolvedModule = fallbackResolveModule(moduleName);
         }
 
         // Try fallback if TypeScript resolution failed
         if (!resolvedModule) {
+          functions.logger.debug(`Attempting fallback resolution for ${moduleName}`);
           resolvedModule = fallbackResolveModule(moduleName);
         }
 
